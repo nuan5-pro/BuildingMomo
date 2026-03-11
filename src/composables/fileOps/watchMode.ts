@@ -4,9 +4,22 @@ import type { useSettingsStore } from '@/stores/settingsStore'
 import type { useNotification } from '@/composables/useNotification'
 import type { FileWatchState, GameDataFile, GameItem } from '@/types/editor'
 import { WatchHistoryDB } from '@/lib/watchHistoryStore'
+import {
+  SAVE_DATA_FILENAME_REGEX,
+  extractUidFromSaveDataFilename,
+  findBuildDataDirectory,
+  findBuildRecordDirectory,
+  findLatestBuildRecord,
+  findLatestBuildSaveData,
+  isBuildSaveDataFile,
+} from './watchMode.fs'
+import { buildRecordPayloadFromGameItems, parseBuildRecordToGameData } from './watchMode.record'
 
+// 监听历史最多保留 30 条
 const MAX_WATCH_HISTORY = 30
+// 页面可见时的轮询间隔（3 秒）
 const POLL_INTERVAL_ACTIVE = 3000
+// 页面隐藏时降低轮询频率以节省资源（10 秒）
 const POLL_INTERVAL_HIDDEN = 10000
 
 type TranslateFn = (key: string, params?: Record<string, string | number>) => string
@@ -21,72 +34,7 @@ interface CreateWatchModeOpsParams {
   prepareDataForSave: () => Promise<GameItem[] | null>
 }
 
-const SAVE_DATA_FILENAME_REGEX = /^(BUILD|WORLDBUILD)_SAVEDATA_(\d+)\.json$/
-
-function extractUidFromFilename(filename: string): string | null {
-  const match = filename.match(SAVE_DATA_FILENAME_REGEX)
-  return match?.[2] ?? null
-}
-
-function isBuildSaveDataFile(name: string): boolean {
-  return SAVE_DATA_FILENAME_REGEX.test(name)
-}
-
-async function resolvePath(
-  startHandle: FileSystemDirectoryHandle,
-  pathParts: string[]
-): Promise<FileSystemDirectoryHandle | null> {
-  let currentHandle = startHandle
-  for (const part of pathParts) {
-    try {
-      currentHandle = await currentHandle.getDirectoryHandle(part)
-    } catch {
-      return null
-    }
-  }
-  return currentHandle
-}
-
-async function findBuildDataDirectory(
-  dirHandle: FileSystemDirectoryHandle
-): Promise<FileSystemDirectoryHandle | null> {
-  if (dirHandle.name === 'BuildData') {
-    return dirHandle
-  }
-
-  try {
-    return await dirHandle.getDirectoryHandle('BuildData')
-  } catch {
-    // continue
-  }
-
-  try {
-    const x6Game = await dirHandle.getDirectoryHandle('X6Game')
-    const result = await resolvePath(x6Game, ['Saved', 'SavedData', 'BuildData'])
-    if (result) return result
-  } catch {
-    // continue
-  }
-
-  try {
-    const saved = await dirHandle.getDirectoryHandle('Saved')
-    const result = await resolvePath(saved, ['SavedData', 'BuildData'])
-    if (result) return result
-  } catch {
-    // continue
-  }
-
-  try {
-    const savedData = await dirHandle.getDirectoryHandle('SavedData')
-    const result = await resolvePath(savedData, ['BuildData'])
-    if (result) return result
-  } catch {
-    // continue
-  }
-
-  return null
-}
-
+/** 从 JSON 字符串中快速读取 PlaceInfo 条目数量，解析失败返回 0 */
 function getItemCountFromContent(content: string): number {
   try {
     const jsonData = JSON.parse(content)
@@ -94,32 +42,6 @@ function getItemCountFromContent(content: string): number {
   } catch {
     return 0
   }
-}
-
-async function findLatestBuildSaveData(
-  buildDataDir: FileSystemDirectoryHandle
-): Promise<{ file: File; handle: FileSystemFileHandle } | null> {
-  const buildFiles: Array<{ file: File; handle: FileSystemFileHandle }> = []
-
-  try {
-    for await (const entry of (buildDataDir as any).values()) {
-      if (entry.kind === 'file' && isBuildSaveDataFile(entry.name)) {
-        const fileHandle = entry as FileSystemFileHandle
-        const file = await fileHandle.getFile()
-        buildFiles.push({ file, handle: fileHandle })
-      }
-    }
-  } catch (e) {
-    console.error('Failed to scan BuildData directory:', e)
-    return null
-  }
-
-  if (buildFiles.length === 0) {
-    return null
-  }
-
-  buildFiles.sort((a, b) => b.file.lastModified - a.file.lastModified)
-  return buildFiles[0] ?? null
 }
 
 export function createWatchModeOps(params: CreateWatchModeOpsParams) {
@@ -133,19 +55,27 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     prepareDataForSave,
   } = params
 
+  // 监听模式的全局响应式状态
   const watchState = ref<FileWatchState>({
     isActive: false,
     dirHandle: null,
     dirPath: '',
     lastCheckedTime: 0,
-    fileIndex: new Map(),
+    fileIndex: new Map(), // 文件名 → 上次已知内容快照，用于变更检测
     updateHistory: [],
     lastImportedFileHandle: null,
     lastImportedFileName: '',
   })
 
+  // setTimeout 返回的计时器 ID，null 表示轮询未启动
   let pollTimer: number | null = null
+  // BuildRecord 目录句柄（可选），有效时 saveToGame 会同步写入 .record 文件
+  let buildRecordDirHandle: FileSystemDirectoryHandle | null = null
 
+  /**
+   * 将一次文件更新记录持久化到 IndexedDB，并同步更新内存中的 updateHistory。
+   * 若同一 id 已存在于内存历史中则跳过插入，超出上限时移除最旧一条。
+   */
   async function addToWatchHistory(
     fileName: string,
     content: string,
@@ -153,6 +83,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     lastModified: number
   ): Promise<void> {
     const historyId = `${fileName}_${lastModified}`
+    const detectedAt = Date.now()
     const size = new Blob([content]).size
 
     try {
@@ -162,7 +93,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         content,
         itemCount,
         lastModified,
-        detectedAt: Date.now(),
+        detectedAt,
         size,
       })
       console.log(`[FileWatch] Saved to history DB: ${historyId}`)
@@ -177,7 +108,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         name: fileName,
         lastModified,
         itemCount,
-        detectedAt: Date.now(),
+        detectedAt,
         size,
       })
       if (history.length > MAX_WATCH_HISTORY) {
@@ -185,37 +116,36 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       }
     }
 
+    // 异步清理 IndexedDB 中超出上限的旧记录
     WatchHistoryDB.clearOld(MAX_WATCH_HISTORY).catch((err) =>
       console.error('[FileWatch] Failed to clean old history:', err)
     )
   }
 
-  async function verifyPermission(
-    fileHandle: FileSystemFileHandle,
-    readWrite: boolean
-  ): Promise<boolean> {
-    const options: any = {}
-    if (readWrite) {
-      options.mode = 'readwrite'
-    }
-
-    if ((await (fileHandle as any).queryPermission(options)) === 'granted') {
-      return true
-    }
-
-    if ((await (fileHandle as any).requestPermission(options)) === 'granted') {
-      return true
-    }
-
+  /**
+   * 检查并申请文件句柄的读写权限。
+   * 已授权时直接返回 true；未授权时弹出浏览器权限请求对话框。
+   */
+  async function verifyPermission(fileHandle: FileSystemFileHandle): Promise<boolean> {
+    const options = { mode: 'readwrite' as const }
+    if ((await (fileHandle as any).queryPermission(options)) === 'granted') return true
+    if ((await (fileHandle as any).requestPermission(options)) === 'granted') return true
     return false
   }
 
-  async function importFromContent(
+  /**
+   * 将已读取的文件内容导入为 scheme 的核心实现。
+   *
+   * @param updateWatchState 为 true 时更新 fileIndex 与 lastImportedFile*，
+   *   从 BuildRecord 导入时传 false 以避免污染 BuildData 的文件索引。
+   */
+  async function importFromContentInternal(
     content: string,
     fileName: string,
     handle: FileSystemFileHandle,
     lastModified: number,
-    itemCount?: number
+    itemCount?: number,
+    updateWatchState: boolean = true
   ): Promise<void> {
     if (!watchState.value.isActive) {
       notification.warning(t('fileOps.importWatched.notStarted'))
@@ -223,27 +153,31 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
 
     try {
-      const uid = extractUidFromFilename(fileName) || 'unknown'
+      const uid = extractUidFromSaveDataFilename(fileName) || 'unknown'
       console.log(`[FileWatch] Importing content: ${fileName} (UID: ${uid})`)
 
+      // 调用 editorStore 解析 JSON 并创建/更新对应的 scheme tab
       const importResult = await editorStore.importJSONAsScheme(content, fileName, lastModified)
 
       if (importResult.success) {
         console.log(`[FileWatch] Successfully imported: ${fileName}`)
+        if (updateWatchState) {
+          // 记录最后一次导入的文件，供 saveToGame 用作写回目标
+          watchState.value.lastImportedFileHandle = handle
+          watchState.value.lastImportedFileName = fileName
 
-        watchState.value.lastImportedFileHandle = handle
-        watchState.value.lastImportedFileName = fileName
-
-        const cached = watchState.value.fileIndex.get(fileName)
-        const finalItemCount = itemCount ?? getItemCountFromContent(content)
-        watchState.value.fileIndex.set(fileName, {
-          lastModified: lastModified,
-          lastContent: content,
-          itemCount: finalItemCount,
-          firstDetectedAt: cached?.firstDetectedAt ?? lastModified,
-        })
+          const cached = watchState.value.fileIndex.get(fileName)
+          const finalItemCount = itemCount ?? getItemCountFromContent(content)
+          watchState.value.fileIndex.set(fileName, {
+            lastModified: lastModified,
+            lastContent: content,
+            itemCount: finalItemCount,
+            firstDetectedAt: cached?.firstDetectedAt ?? lastModified,
+          })
+        }
 
         notification.success(t('fileOps.import.success'))
+        // 提前预加载当前 scheme 所需的 3D 资源
         preloadActiveSchemeResources()
       } else {
         notification.error(
@@ -256,6 +190,38 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /** 从 BuildData JSON 文件内容导入（更新 fileIndex） */
+  async function importFromContent(
+    content: string,
+    fileName: string,
+    handle: FileSystemFileHandle,
+    lastModified: number,
+    itemCount?: number
+  ): Promise<void> {
+    await importFromContentInternal(content, fileName, handle, lastModified, itemCount, true)
+  }
+
+  /** 从 BuildRecord 文件内容导入（不更新 fileIndex，避免污染 BuildData 索引） */
+  async function importFromRecordContent(
+    content: string,
+    fileName: string,
+    handle: FileSystemFileHandle,
+    lastModified: number,
+    itemCount?: number
+  ): Promise<void> {
+    await importFromContentInternal(content, fileName, handle, lastModified, itemCount, false)
+  }
+
+  /**
+   * 将当前活跃 scheme 的数据写回游戏存档文件。
+   *
+   * 写入目标文件的优先级：
+   *   1. scheme 的 filePath 对应的合法存档文件（UID 不是 13 位时视为普通 ID）
+   *   2. 上一次导入的文件（lastImportedFileHandle）
+   *   3. BuildData 目录中最新的存档文件
+   *
+   * 写入存档后，若找到了 BuildRecord 目录，还会同步更新最新的 .record 文件。
+   */
   async function saveToGame(): Promise<void> {
     if (!watchState.value.isActive || !watchState.value.dirHandle) {
       notification.warning(t('fileOps.saveToGame.noDir'))
@@ -267,6 +233,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       return
     }
 
+    // 准备经过验证、修正后的导出数据
     const gameItems = await prepareDataForSave()
     if (!gameItems) return
 
@@ -281,15 +248,11 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     const currentFileName = editorStore.activeScheme?.filePath.value
     const match = currentFileName?.match(SAVE_DATA_FILENAME_REGEX)
 
-    let isValidName = false
-    if (match && match[2]) {
-      const idPart = match[2]
-      if (idPart.length !== 13) {
-        isValidName = true
-      }
-    }
+    // UID 恰好为 13 位时通常是游戏自动生成的临时 ID，不作为写入目标
+    const isValidName = !!(match?.[2] && match[2].length !== 13)
 
     try {
+      // 按优先级确定写入目标文件句柄
       if (isValidName && currentFileName) {
         handle = await watchState.value.dirHandle.getFileHandle(currentFileName, {
           create: true,
@@ -315,16 +278,19 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
 
       const jsonString = JSON.stringify(exportData)
 
-      const permission = await verifyPermission(handle, true)
+      // 写入前确保拥有写权限
+      const permission = await verifyPermission(handle)
       if (!permission) {
         notification.error(t('fileOps.saveToGame.noPermission'))
         return
       }
 
+      // 写入存档 JSON
       const writable = await handle.createWritable()
       await writable.write(jsonString)
       await writable.close()
 
+      // 读取写入后的实际 lastModified，加 1000ms 偏移量防止轮询误判为外部变更
       const updatedFile = await handle.getFile()
       const cached = watchState.value.fileIndex.get(finalFileName)
       watchState.value.lastImportedFileHandle = handle
@@ -336,6 +302,27 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         firstDetectedAt: cached?.firstDetectedAt ?? updatedFile.lastModified,
       })
 
+      // 如果有 BuildRecord 目录，同步写入最新的 .record 文件
+      if (buildRecordDirHandle) {
+        try {
+          const latestRecord = await findLatestBuildRecord(buildRecordDirHandle)
+          if (latestRecord) {
+            const recordPermission = await verifyPermission(latestRecord.handle)
+            if (recordPermission) {
+              const recordPayload = buildRecordPayloadFromGameItems(gameItems)
+              const recordWritable = await latestRecord.handle.createWritable()
+              await recordWritable.write(JSON.stringify(recordPayload))
+              await recordWritable.close()
+              console.log(`[FileOps] Synced save to latest BuildRecord: ${latestRecord.file.name}`)
+            } else {
+              console.warn('[FileOps] No write permission for latest BuildRecord file')
+            }
+          }
+        } catch (recordError) {
+          console.warn('[FileOps] Failed to sync latest BuildRecord file:', recordError)
+        }
+      }
+
       console.log(`[FileOps] Successfully saved to game: ${finalFileName}`)
       notification.success(t('fileOps.saveToGame.success'))
     } catch (error: any) {
@@ -346,6 +333,13 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /**
+   * 单次文件变更检测。
+   * 遍历 BuildData 目录中所有存档文件，与 fileIndex 中的缓存比较 lastModified。
+   * 有变更时读取内容，过滤掉内容未实际改变的情况（时间戳更新但内容相同）。
+   * 多个文件同时更新时只取 lastModified 最新的一个触发导入通知。
+   * 返回 true 表示本次检测检到了真实内容变更。
+   */
   async function checkFileUpdate(): Promise<boolean> {
     if (!watchState.value.isActive || !watchState.value.dirHandle) {
       return false
@@ -354,6 +348,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     try {
       watchState.value.lastCheckedTime = Date.now()
 
+      // 第一轮：找出所有 lastModified 有变化的文件
       const updates: Array<{ name: string; file: File; handle: FileSystemFileHandle }> = []
 
       for await (const entry of (watchState.value.dirHandle as any).values()) {
@@ -372,6 +367,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         return false
       }
 
+      // 第二轮：读取内容，过滤内容不变的情况，找出真正更新的最新文件
       let latestFile: {
         name: string
         file: File
@@ -386,6 +382,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         const cached = watchState.value.fileIndex.get(name)
 
         if (content === cached?.lastContent) {
+          // 文件被触碰（如 saveToGame 写入后），但内容相同，仅更新时间戳缓存
           console.log(`[FileWatch] File touched but content identical: ${name}`)
           watchState.value.fileIndex.set(name, {
             lastModified: file.lastModified,
@@ -399,6 +396,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         try {
           const jsonData = JSON.parse(content)
           const itemCount = Array.isArray(jsonData?.PlaceInfo) ? jsonData.PlaceInfo.length : 0
+          // 只有 NeedRestore === true 的文件才视为有效的游戏存档变更
           if (jsonData.NeedRestore === true) {
             if (file.lastModified > latestModified) {
               latestModified = file.lastModified
@@ -414,11 +412,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
           })
         } catch (parseError) {
           console.error(`[FileWatch] Failed to parse JSON for ${name}:`, parseError)
-          if (file.lastModified > latestModified) {
-            latestModified = file.lastModified
-            latestFile = { name, file, handle, content, itemCount: 0 }
-          }
-
           watchState.value.fileIndex.set(name, {
             lastModified: file.lastModified,
             lastContent: content,
@@ -429,6 +422,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       }
 
       if (latestFile) {
+        // 持久化到历史记录
         await addToWatchHistory(
           latestFile.name,
           latestFile.content,
@@ -439,6 +433,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         console.log(
           `[FileWatch] File updated: ${latestFile.name}, lastModified: ${new Date(latestFile.file.lastModified).toLocaleString()}`
         )
+        // 若启用了更新通知，弹出确认对话框；用户确认后导入
         if (settingsStore.settings.enableWatchNotification) {
           notification
             .fileUpdate(latestFile.name, latestFile.file.lastModified)
@@ -468,6 +463,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /** 页面从后台切回前台时立即触发一次检测，避免等待下一个轮询周期 */
   function handleVisibilityChange() {
     if (document.visibilityState === 'visible' && watchState.value.isActive) {
       console.log('[FileWatch] Page visible, checking for updates...')
@@ -475,6 +471,11 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /**
+   * 启动轮询循环。
+   * 采用自适应间隔：页面可见时 3s，隐藏时 10s。
+   * 重复调用不会创建多个计时器。
+   */
   function startPolling() {
     if (pollTimer !== null) {
       return
@@ -493,6 +494,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     poll()
   }
 
+  /** 停止轮询并移除 visibilitychange 监听器 */
   function stopPolling() {
     if (pollTimer !== null) {
       clearTimeout(pollTimer)
@@ -504,6 +506,15 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /**
+   * 启动监听模式的完整流程：
+   *   1. 弹出目录选择器，要求用户授予读写权限
+   *   2. 在所选目录中定位 BuildData（必须）和 BuildRecord（可选）子目录
+   *   3. 扫描并缓存 BuildData 中所有现有存档文件的快照（fileIndex）
+   *   4. 从 IndexedDB 恢复历史监听记录
+   *   5. 启动轮询
+   *   6. 若存在最新存档且 NeedRestore 为 true，询问用户是否立即导入
+   */
   async function startWatchMode(): Promise<void> {
     if (!('showDirectoryPicker' in window)) {
       notification.error(t('fileOps.watch.notSupported'))
@@ -513,35 +524,44 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     ensureResourcesReady()
 
     try {
+      // 步骤 1：打开系统目录选择器
       const dirHandle = await (window as any).showDirectoryPicker({
         mode: 'readwrite',
       })
 
       console.log('[FileWatch] Selected directory for monitoring:', dirHandle.name)
 
+      // 步骤 2：定位 BuildData 目录（必须存在，否则无法监听）
       const buildDataDir = await findBuildDataDirectory(dirHandle)
       if (!buildDataDir) {
         notification.error(t('fileOps.watch.noBuildData'))
         return
       }
 
+      // 步骤 2b：尝试定位 BuildRecord 目录（可选，用于更精确的导入与写回）
+      buildRecordDirHandle = await findBuildRecordDirectory(dirHandle)
+      if (buildRecordDirHandle) {
+        console.log('[FileWatch] Found BuildRecord directory:', buildRecordDirHandle.name)
+      } else {
+        console.log('[FileWatch] BuildRecord directory not found, fallback to BuildData only')
+      }
+
       console.log('[FileWatch] Found BuildData directory:', buildDataDir.name)
 
+      // 步骤 3a：找到最新存档文件（用于初始导入询问）
       const result = await findLatestBuildSaveData(buildDataDir)
 
-      let fileHandle: FileSystemFileHandle | null = null
-      let fileName = ''
-      let lastModified = 0
+      const fileHandle = result?.handle ?? null
+      const fileName = result?.file.name ?? ''
+      const lastModified = result?.file.lastModified ?? 0
 
       if (result) {
-        fileHandle = result.handle
-        fileName = result.file.name
-        lastModified = result.file.lastModified
         console.log(`[FileWatch] Found existing file: ${fileName}`)
       } else {
         console.log('[FileWatch] No existing file found, will monitor for new files')
       }
 
+      // 步骤 3b：为 BuildData 中所有现有存档建立 fileIndex 快照，作为变更检测基线
       const fileIndex = new Map<
         string,
         { lastModified: number; lastContent: string; itemCount: number; firstDetectedAt: number }
@@ -549,8 +569,8 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
 
       for await (const entry of (buildDataDir as any).values()) {
         if (entry.kind === 'file' && isBuildSaveDataFile(entry.name)) {
-          const fileHandle = entry as FileSystemFileHandle
-          const file = await fileHandle.getFile()
+          const entryHandle = entry as FileSystemFileHandle
+          const file = await entryHandle.getFile()
           const content = await file.text()
           fileIndex.set(entry.name, {
             lastModified: file.lastModified,
@@ -561,6 +581,10 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         }
       }
 
+      // fileIndex 扫描已读取了所有文件内容，直接取缓存，避免再次读取磁盘
+      const latestContent = fileName ? fileIndex.get(fileName)?.lastContent : undefined
+
+      // 步骤 4：从 IndexedDB 恢复历史记录（按时间倒序，最多 MAX_WATCH_HISTORY 条）
       let restoredHistory: typeof watchState.value.updateHistory = []
       try {
         const allMetadata = await WatchHistoryDB.getAllMetadata()
@@ -571,6 +595,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         restoredHistory = watchState.value.updateHistory
       }
 
+      // 激活监听状态
       watchState.value = {
         isActive: true,
         dirHandle: buildDataDir,
@@ -582,12 +607,13 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         lastImportedFileName: fileName,
       }
 
+      // 步骤 5：启动轮询
       startPolling()
 
-      if (result) {
+      // 步骤 6：若最新存档 NeedRestore 为 true，询问用户是否立即导入
+      if (result && latestContent !== undefined) {
         try {
-          const content = await result.file.text()
-          const jsonData = JSON.parse(content)
+          const jsonData = JSON.parse(latestContent)
 
           if (jsonData.NeedRestore === true) {
             const shouldImport = await notification.confirm({
@@ -602,8 +628,8 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
 
             if (shouldImport) {
               await importFromWatchedFile()
-              const itemCount = getItemCountFromContent(content)
-              await addToWatchHistory(fileName, content, itemCount, lastModified)
+              const itemCount = getItemCountFromContent(latestContent)
+              await addToWatchHistory(fileName, latestContent, itemCount, lastModified)
             }
           } else {
             notification.success(t('fileOps.watch.started'))
@@ -617,6 +643,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       }
     } catch (error: any) {
       if (error.name === 'AbortError') {
+        // 用户主动取消目录选择，不报错
         console.log('[FileWatch] User cancelled directory picker')
         return
       }
@@ -627,8 +654,10 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /** 停止监听模式，清理状态（保留历史记录列表供 UI 继续显示） */
   function stopWatchMode() {
     stopPolling()
+    buildRecordDirHandle = null
     const existingHistory = watchState.value.updateHistory
     watchState.value = {
       isActive: false,
@@ -643,6 +672,12 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     console.log('[FileWatch] Watch mode stopped')
   }
 
+  /**
+   * 手动触发"从监听目录导入最新文件"。
+   *
+   * 优先尝试从 BuildRecord（.record 文件）导入，因为它包含更完整的游戏状态；
+   * 若 BuildRecord 不存在或解析失败，则回退到 BuildData 中的最新 JSON 存档。
+   */
   async function importFromWatchedFile(): Promise<void> {
     if (!watchState.value.isActive || !watchState.value.dirHandle) {
       notification.warning(t('fileOps.importWatched.notStarted'))
@@ -650,6 +685,34 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
 
     try {
+      // 优先路径：尝试从 BuildRecord 中读取最新的 .record 文件
+      if (buildRecordDirHandle) {
+        const latestRecord = await findLatestBuildRecord(buildRecordDirHandle)
+        if (latestRecord) {
+          try {
+            console.log('[FileWatch] Found latest BuildRecord:', latestRecord.file.name)
+            const recordContent = await latestRecord.file.text()
+            // 将 .record 格式转换为标准 GameDataFile 后导入
+            const parsed = parseBuildRecordToGameData(recordContent)
+            const content = JSON.stringify(parsed)
+            await importFromRecordContent(
+              content,
+              latestRecord.file.name,
+              latestRecord.handle,
+              latestRecord.file.lastModified,
+              parsed.PlaceInfo.length
+            )
+            return
+          } catch (recordParseError) {
+            console.warn(
+              '[FileWatch] Failed to parse latest BuildRecord, fallback to BuildData:',
+              recordParseError
+            )
+          }
+        }
+      }
+
+      // 回退路径：直接读取 BuildData 中最新的存档 JSON
       const result = await findLatestBuildSaveData(watchState.value.dirHandle)
       if (!result) {
         notification.warning(t('fileOps.importWatched.notFound'))
@@ -664,14 +727,17 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /** 返回内存中的监听历史列表（响应式数组引用） */
   function getWatchHistory() {
     return watchState.value.updateHistory
   }
 
+  /** 清空内存中的监听历史列表（不影响 IndexedDB） */
   function clearWatchHistory() {
     watchState.value.updateHistory = []
   }
 
+  /** 删除指定历史记录（同时从 IndexedDB 和内存列表中移除） */
   async function deleteHistoryRecord(historyId: string): Promise<void> {
     try {
       await WatchHistoryDB.delete(historyId)
@@ -686,6 +752,10 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
+  /**
+   * 从历史记录中导入指定快照。
+   * 从 IndexedDB 读取完整内容后走正常的 importFromContent 流程。
+   */
   async function importFromHistory(historyId: string): Promise<void> {
     if (!watchState.value.isActive || !watchState.value.dirHandle) {
       notification.warning(t('fileOps.importWatched.notStarted'))
@@ -700,6 +770,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         return
       }
 
+      // 通过目录句柄获取对应文件的 handle（用于后续写回）
       const handle = await watchState.value.dirHandle.getFileHandle(snapshot.fileName)
       await importFromContent(
         snapshot.content,
@@ -716,10 +787,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     }
   }
 
-  function cleanup() {
-    stopPolling()
-  }
-
   return {
     watchState,
     startWatchMode,
@@ -731,6 +798,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     deleteHistoryRecord,
     importFromHistory,
     saveToGame,
-    cleanup,
+    cleanup: stopPolling,
   }
 }
