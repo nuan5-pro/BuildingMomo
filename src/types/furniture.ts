@@ -69,6 +69,7 @@ export interface FurnitureMeshConfig {
   rotation: { x: number; y: number; z: number; w: number }
   trans: { x: number; y: number; z: number }
   scale: { x: number; y: number; z: number }
+  hash?: string
 }
 
 /** 单个染色变体的渲染配置 */

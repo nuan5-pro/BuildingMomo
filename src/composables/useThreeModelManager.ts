@@ -29,15 +29,28 @@ import type { Texture } from 'three'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { MAX_RENDER_INSTANCES } from '@/types/constants'
 import type { ModelDyePlan } from '@/lib/modelDye'
+import { getGLBCacheEntry, putGLBCacheEntry } from '@/lib/glbCache'
 
 // ─── 材质注册表类型 ───────────────────────────────────────────────────────────
 
-/** 单个 baseName 下各类型贴图的变体映射 */
+/**
+ * 懒加载贴图引用：持有 GLB 解析器引用，按需解码图片
+ * _cache: undefined = 未加载；null = 加载失败；Texture = 已加载
+ * _loading: 正在进行中的加载 Promise，防止并发重复解码
+ */
+interface TextureRef {
+  name: string
+  result: GLTF
+  _cache?: Texture | null
+  _loading?: Promise<Texture | null>
+}
+
+/** 单个 baseName 下各类型贴图的变体映射（懒加载引用） */
 interface MaterialRegistryEntry {
-  D: Map<number, Texture> // diffuse 变体
-  N: Map<number, Texture> // normal 变体
-  O: Map<number, Texture> // ORM 变体
-  T: Map<number, Texture> // tint 调色板变体
+  D: Map<number, TextureRef> // diffuse 变体
+  N: Map<number, TextureRef> // normal 变体
+  O: Map<number, TextureRef> // ORM 变体
+  T: Map<number, TextureRef> // tint 调色板变体
 }
 
 /** 材质注册表：baseName → 各类型变体贴图 */
@@ -112,50 +125,52 @@ function resolveMaterialBaseName(mat: Material): string | null {
   return null
 }
 
-function registerParsedVariant(
-  registry: MaterialRegistry,
-  parsed: ParsedMaterialName,
-  texture: Texture | null
-): string | null {
-  if (!texture) return null
+/** 对已解码贴图设置采样参数 */
+function applyTextureSettings(texture: Texture, type: 'D' | 'N' | 'O' | 'T', name: string): void {
+  texture.flipY = false
+  texture.name = name
+  texture.wrapS = RepeatWrapping
+  texture.wrapT = RepeatWrapping
+  texture.colorSpace = type === 'D' || type === 'T' ? SRGBColorSpace : NoColorSpace
 
-  const entry = getOrCreateRegistryEntry(registry, parsed.baseName)
-  if (!entry[parsed.type].has(parsed.variantIdx)) {
-    entry[parsed.type].set(parsed.variantIdx, texture)
+  if (type === 'T') {
+    texture.minFilter = NearestFilter
+    texture.magFilter = NearestFilter
+    texture.generateMipmaps = false
+  } else {
+    texture.minFilter = LinearMipmapLinearFilter
+    texture.magFilter = LinearFilter
+    texture.generateMipmaps = true
   }
 
-  return `${parsed.baseName}_${parsed.type}${parsed.variantIdx}`
+  texture.needsUpdate = true
 }
 
-function registerNamedTextureVariant(
-  registry: MaterialRegistry,
-  textureName: string,
-  texture: Texture | null
-): string | null {
+/**
+ * 按需解码贴图，结果缓存在 TextureRef 上
+ * 相同 ref 并发调用时共享同一个加载 Promise，不会重复解码
+ */
+async function resolveTextureRef(ref: TextureRef): Promise<Texture | null> {
+  if ('_cache' in ref) return ref._cache ?? null
+  if (ref._loading) return ref._loading
+  ref._loading = loadImageTextureByName(ref.result, ref.name).then((texture) => {
+    const parsed = parseMaterialName(ref.name)
+    if (texture && parsed) applyTextureSettings(texture, parsed.type, ref.name)
+    ref._cache = texture ?? null
+    ref._loading = undefined
+    return ref._cache
+  })
+  return ref._loading
+}
+
+/** 注册懒加载引用（不解码图片） */
+function registerLazyVariant(registry: MaterialRegistry, textureName: string, result: GLTF): void {
   const parsed = parseMaterialName(textureName)
-  if (!parsed) return null
-
-  if (texture) {
-    texture.flipY = false
-    texture.name = textureName
-    texture.wrapS = RepeatWrapping
-    texture.wrapT = RepeatWrapping
-    texture.colorSpace = parsed.type === 'D' || parsed.type === 'T' ? SRGBColorSpace : NoColorSpace
-
-    if (parsed.type === 'T') {
-      texture.minFilter = NearestFilter
-      texture.magFilter = NearestFilter
-      texture.generateMipmaps = false
-    } else {
-      texture.minFilter = LinearMipmapLinearFilter
-      texture.magFilter = LinearFilter
-      texture.generateMipmaps = true
-    }
-
-    texture.needsUpdate = true
+  if (!parsed) return
+  const entry = getOrCreateRegistryEntry(registry, parsed.baseName)
+  if (!entry[parsed.type].has(parsed.variantIdx)) {
+    entry[parsed.type].set(parsed.variantIdx, { name: textureName, result })
   }
-
-  return registerParsedVariant(registry, parsed, texture)
 }
 
 function getMaterialVariantRefs(
@@ -387,18 +402,25 @@ function copyMaterialPresentation(target: Material, source: Material): void {
   }
 }
 
-function buildDefaultPlainMaterial(
+async function buildDefaultPlainMaterial(
   sourceMat: Material,
   baseName: string | null,
   registry: MaterialRegistry
-): Material {
+): Promise<Material> {
   if (!baseName) return sourceMat
 
   const regEntry = registry.get(baseName)
-  const dTex = regEntry?.D.get(0) ?? extractTexture(sourceMat, 'D')
-  const nTex = regEntry?.N.get(0) ?? extractTexture(sourceMat, 'N')
-  const oTex = regEntry?.O.get(0) ?? extractTexture(sourceMat, 'O')
-  const tTex = regEntry?.T.get(0) ?? null
+  const d0 = regEntry?.D.get(0)
+  const n0 = regEntry?.N.get(0)
+  const o0 = regEntry?.O.get(0)
+  const t0 = regEntry?.T.get(0)
+
+  const [dTex, nTex, oTex, tTex] = await Promise.all([
+    d0 ? resolveTextureRef(d0) : Promise.resolve(extractTexture(sourceMat, 'D')),
+    n0 ? resolveTextureRef(n0) : Promise.resolve(extractTexture(sourceMat, 'N')),
+    o0 ? resolveTextureRef(o0) : Promise.resolve(extractTexture(sourceMat, 'O')),
+    t0 ? resolveTextureRef(t0) : Promise.resolve(null),
+  ])
 
   // 没有默认贴图可用时，回退原始材质。
   if (!dTex && !nTex && !oTex && !tTex) return sourceMat
@@ -415,44 +437,48 @@ function buildDefaultPlainMaterial(
  * 命中 dyeMap → 按 pattern/tint 从注册表取贴图 → buildDyeMaterial
  * 未命中 dyeMap → 复用默认组装材质（D0/N0/O0/T0）
  */
-function buildDyedMaterials(
+async function buildDyedMaterials(
   plainMats: Material[],
   meshBaseNames: (string | null)[],
   slotMeshIndices: number[],
   registry: MaterialRegistry,
   dyeMap: Map<number, { pattern: number; tint: number }>,
   debugLabel: string
-): Material | Material[] {
-  const result = plainMats.map((plainMat, idx) => {
-    const meshIndex = slotMeshIndices[idx] ?? -1
-    const dyeEntry = dyeMap.get(meshIndex)
-    if (!dyeEntry) {
-      return plainMat
-    }
+): Promise<Material | Material[]> {
+  const result = await Promise.all(
+    plainMats.map(async (plainMat, idx) => {
+      const meshIndex = slotMeshIndices[idx] ?? -1
+      const dyeEntry = dyeMap.get(meshIndex)
+      if (!dyeEntry) return plainMat
 
-    const baseName = meshBaseNames[idx]
-    if (!baseName) {
-      console.warn(`[ModelManager][BuildDyed] ${debugLabel} slot=${idx} unresolved baseName`, {
-        material: getMaterialDebugName(plainMat),
-        meshIndex,
-        dyeEntry,
-      })
-      return plainMat
-    }
+      const baseName = meshBaseNames[idx]
+      if (!baseName) {
+        console.warn(`[ModelManager][BuildDyed] ${debugLabel} slot=${idx} unresolved baseName`, {
+          material: getMaterialDebugName(plainMat),
+          meshIndex,
+          dyeEntry,
+        })
+        return plainMat
+      }
 
-    const regEntry = registry.get(baseName)
-    const dTex =
-      regEntry?.D.get(dyeEntry.pattern) ?? regEntry?.D.get(0) ?? extractTexture(plainMat, 'D')
-    const nTex =
-      regEntry?.N.get(dyeEntry.pattern) ?? regEntry?.N.get(0) ?? extractTexture(plainMat, 'N')
-    const oTex =
-      regEntry?.O.get(dyeEntry.pattern) ?? regEntry?.O.get(0) ?? extractTexture(plainMat, 'O')
-    const tTex = regEntry?.T.get(dyeEntry.tint) ?? regEntry?.T.get(0) ?? null
+      const regEntry = registry.get(baseName)
+      const dRef = regEntry?.D.get(dyeEntry.pattern) ?? regEntry?.D.get(0)
+      const nRef = regEntry?.N.get(dyeEntry.pattern) ?? regEntry?.N.get(0)
+      const oRef = regEntry?.O.get(dyeEntry.pattern) ?? regEntry?.O.get(0)
+      const tRef = regEntry?.T.get(dyeEntry.tint) ?? regEntry?.T.get(0)
 
-    const dyedMat = buildDyeMaterial(dTex, nTex, oTex, tTex)
-    copyMaterialPresentation(dyedMat, plainMat)
-    return dyedMat
-  })
+      const [dTex, nTex, oTex, tTex] = await Promise.all([
+        dRef ? resolveTextureRef(dRef) : Promise.resolve(extractTexture(plainMat, 'D')),
+        nRef ? resolveTextureRef(nRef) : Promise.resolve(extractTexture(plainMat, 'N')),
+        oRef ? resolveTextureRef(oRef) : Promise.resolve(extractTexture(plainMat, 'O')),
+        tRef ? resolveTextureRef(tRef) : Promise.resolve(null),
+      ])
+
+      const dyedMat = buildDyeMaterial(dTex, nTex, oTex, tTex)
+      copyMaterialPresentation(dyedMat, plainMat)
+      return dyedMat
+    })
+  )
 
   return result.length === 1 ? result[0]! : (result as Material[])
 }
@@ -565,11 +591,30 @@ function reverseGeometryWinding(geometry: BufferGeometry): void {
 async function loadGLBModel(
   gltfLoader: GLTFLoader,
   MODEL_BASE_URL: string,
-  meshPath: string
+  meshPath: string,
+  hash?: string
 ): Promise<GLTF | null> {
+  const fileName = meshPath.endsWith('.glb') ? meshPath : `${meshPath}.glb`
+  const url = `${MODEL_BASE_URL}${fileName}`
+
   try {
-    const fileName = meshPath.endsWith('.glb') ? meshPath : `${meshPath}.glb`
-    return await gltfLoader.loadAsync(`${MODEL_BASE_URL}${fileName}`)
+    // 有 hash 时查缓存，key = path，比对 hash 决定是否命中
+    if (hash) {
+      const entry = await getGLBCacheEntry(meshPath)
+      if (entry?.hash === hash) {
+        return (await gltfLoader.parseAsync(entry.buffer, url)) as GLTF
+      }
+    }
+
+    // 缓存未命中或 hash 更新：fetch 原始 ArrayBuffer
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const buffer = await response.arrayBuffer()
+
+    // 异步写入 IDB（hash 变更时覆盖旧记录），不阻塞解析
+    if (hash) putGLBCacheEntry(meshPath, hash, buffer).catch(() => {})
+
+    return (await gltfLoader.parseAsync(buffer, url)) as GLTF
   } catch (error) {
     console.warn(`[ModelManager] Failed to load GLB: ${meshPath}`, error)
     return null
@@ -616,10 +661,10 @@ async function processGeometryForItem(
   const tempScale = new Vector3()
   const tempTrans = new Vector3()
 
-  // Phase 1: 并发加载所有 GLB
+  // Phase 1: 并发加载所有 GLB（有 hash 时优先从 IDB 缓存读取）
   const gltfResults: GLTF[] = await Promise.all(
     config.meshes.map((meshConfig: any) =>
-      loadGLBModel(gltfLoader, MODEL_BASE_URL, meshConfig.path)
+      loadGLBModel(gltfLoader, MODEL_BASE_URL, meshConfig.path, meshConfig.hash)
     )
   )
 
@@ -701,28 +746,33 @@ async function processGeometryForItem(
   geometry.computeBoundingBox()
   const boundingBox = geometry.boundingBox!.clone()
 
-  // Phase 3: 从所有 GLB 的 parser 材质和 userData 引用的 image 变体构建注册表
-
+  // Phase 3: 扫描材质 extras，注册懒加载引用（不解码任何图片）
   const materialRegistry: MaterialRegistry = new Map()
   for (const result of gltfResults) {
     if (!result) continue
-    const matCount: number = result.parser.json.materials?.length ?? 0
-    if (matCount === 0) continue
-
-    for (let i = 0; i < matCount; i++) {
-      const mat = await (result.parser.getDependency('material', i) as Promise<Material>)
-      const variantRefs = getMaterialVariantRefs(mat)
+    const rawMaterials = (result.parser.json.materials ?? []) as Array<{
+      extras?: Record<string, unknown>
+    }>
+    for (const rawMat of rawMaterials) {
+      const extras = rawMat.extras
+      if (!extras) continue
       for (const type of ['D', 'N', 'O', 'T'] as const) {
-        for (const textureName of variantRefs[type] ?? []) {
-          const texture = await loadImageTextureByName(result, textureName)
-          registerNamedTextureVariant(materialRegistry, textureName, texture)
+        const raw = extras[type]
+        if (!Array.isArray(raw)) continue
+        for (const textureName of raw) {
+          if (typeof textureName === 'string' && textureName.trim()) {
+            registerLazyVariant(materialRegistry, textureName.trim(), result)
+          }
         }
       }
     }
   }
 
-  const plainMaterials = sourceMaterials.map((sourceMat, idx) =>
-    buildDefaultPlainMaterial(sourceMat, meshBaseNames[idx] ?? null, materialRegistry)
+  // 构建默认材质（只加载 D0/N0/O0/T0，其余变体在染色时按需加载）
+  const plainMaterials = await Promise.all(
+    sourceMaterials.map((sourceMat, idx) =>
+      buildDefaultPlainMaterial(sourceMat, meshBaseNames[idx] ?? null, materialRegistry)
+    )
   )
 
   for (const mat of plainMaterials) {
@@ -814,7 +864,7 @@ export function useThreeModelManager() {
     } else {
       let coloredMat = coloredMaterialCache.get(cacheKey)
       if (!coloredMat) {
-        coloredMat = buildDyedMaterials(
+        coloredMat = await buildDyedMaterials(
           geomData.plainMaterials,
           geomData.meshBaseNames,
           geomData.slotMeshIndices,
