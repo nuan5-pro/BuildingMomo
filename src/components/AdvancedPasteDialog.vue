@@ -106,7 +106,7 @@ function submit() {
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="sm:max-w-[640px]">
+    <DialogContent class="sm:max-w-[520px]">
       <DialogHeader>
         <DialogTitle>{{ t('advancedPaste.title') }}</DialogTitle>
         <DialogDescription v-if="canPreserveSourceIds">
@@ -262,3 +262,17 @@ function submit() {
     </DialogContent>
   </Dialog>
 </template>
+
+<style scoped>
+/* 隐藏 type="number" 的上下箭头（WebKit / Firefox） */
+:deep(input[type='number']::-webkit-inner-spin-button),
+:deep(input[type='number']::-webkit-outer-spin-button) {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+:deep(input[type='number']) {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+</style>
