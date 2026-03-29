@@ -84,13 +84,14 @@ const positionValue = computed(() => {
 })
 
 // 缩放值（根据模式）
+// 与视口局部 X/Y 对齐：存档 Scale.X↔局部 Y、Scale.Y↔局部 X（见 matrixTransform），故 UI 的 x/y 与 Scale.X/Y 交叉绑定
 const scaleValue = computed(() => {
   if (!selectionInfo.value) return { x: 1, y: 1, z: 1 }
   if (isScaleRelative.value) {
     return scaleState.value
-  } else {
-    return selectionInfo.value.scale
   }
+  const s = selectionInfo.value.scale
+  return { x: s.y, y: s.x, z: s.z }
 })
 
 // 更新位置
@@ -134,17 +135,18 @@ function updatePosition(axis: 'x' | 'y' | 'z', value: number) {
   }
 }
 
-// 更新缩放
+// 更新缩放（UI 轴 → 存档 Scale 轴，x/y 与 scaleValue 一致）
 function updateScale(axis: 'x' | 'y' | 'z', value: number) {
   if (!selectionInfo.value) return
+  const dataAxis = axis === 'x' ? 'y' : axis === 'y' ? 'x' : 'z'
 
   if (isScaleRelative.value) {
     // 相对模式：值为乘数（例如 1.5 表示放大到 1.5 倍）
     const multiplier = value
     if (multiplier === 1) return // 乘以 1 无变化
 
-    const scaleArgs: any = {}
-    scaleArgs[axis] = multiplier
+    const scaleArgs: Record<string, number> = {}
+    scaleArgs[dataAxis] = multiplier
 
     updateSelectedItemsTransform({
       mode: 'relative',
@@ -155,8 +157,8 @@ function updateScale(axis: 'x' | 'y' | 'z', value: number) {
     scaleState.value[axis] = 1
   } else {
     // 绝对模式：直接设置缩放值
-    const scaleArgs: any = {}
-    scaleArgs[axis] = value
+    const scaleArgs: Record<string, number> = {}
+    scaleArgs[dataAxis] = value
 
     updateSelectedItemsTransform({
       mode: 'absolute',

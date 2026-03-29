@@ -87,9 +87,14 @@ function handleRotationInput(axis: 'x' | 'y' | 'z', event: Event) {
   rotationDelta.value = { ...rotationDelta.value, [axis]: Number.isFinite(raw) ? raw : 0 }
 }
 
+// 与侧栏缩放一致：UI x/y 与存档 Scale.X/Y 交叉对应（见 matrixTransform）
 function handleScaleInput(axis: 'x' | 'y' | 'z', event: Event) {
   const raw = Number((event.target as HTMLInputElement).value)
-  scaleMultiplier.value = { ...scaleMultiplier.value, [axis]: clampScaleMultiplier(raw) }
+  const dataAxis = axis === 'x' ? 'y' : axis === 'y' ? 'x' : 'z'
+  scaleMultiplier.value = {
+    ...scaleMultiplier.value,
+    [dataAxis]: clampScaleMultiplier(raw),
+  }
 }
 
 function submit() {
@@ -227,14 +232,14 @@ function submit() {
               <Label>{{ t('advancedPaste.scaleMultiplier') }}</Label>
               <div class="grid grid-cols-3 gap-3">
                 <Input
-                  :model-value="scaleMultiplier.x"
+                  :model-value="scaleMultiplier.y"
                   type="number"
                   min="0"
                   step="0.01"
                   @blur="(e: Event) => handleScaleInput('x', e)"
                 />
                 <Input
-                  :model-value="scaleMultiplier.y"
+                  :model-value="scaleMultiplier.x"
                   type="number"
                   min="0"
                   step="0.01"
