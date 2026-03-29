@@ -8,12 +8,11 @@ import type { Position } from './coordinateTransform'
  *
  * 核心算法：worldRotation = W × L × W⁻¹
  * - W: 工作坐标系旋转矩阵（三轴）
- * - L: 局部空间（工作坐标系）的单轴旋转矩阵
+ * - L: 局部空间（工作坐标系）的组合旋转矩阵（ZYX 欧拉顺序）
  * - W⁻¹: 工作坐标系旋转的逆矩阵
  *
  * @param items 要旋转的物品列表
- * @param axis 旋转轴 ('x' | 'y' | 'z')
- * @param angleDeg 旋转角度（度数），正值为逆时针
+ * @param rotation 工作坐标系中的相对旋转增量（视觉空间，度）
  * @param center 旋转中心（游戏数据空间坐标）
  * @param workingRotation 工作坐标系的三轴旋转角度（度数）
  * @param useModelScale 是否使用模型缩放（影响矩阵构建）
@@ -21,13 +20,16 @@ import type { Position } from './coordinateTransform'
  */
 export function rotateItemsInWorkingCoordinate(
   items: AppItem[],
-  axis: 'x' | 'y' | 'z',
-  angleDeg: number,
+  rotation: { x?: number; y?: number; z?: number },
   center: { x: number; y: number; z: number },
   workingRotation: { x: number; y: number; z: number },
   useModelScale: boolean = false
 ): AppItem[] {
-  if (items.length === 0 || angleDeg === 0) {
+  const rotationX = rotation.x ?? 0
+  const rotationY = rotation.y ?? 0
+  const rotationZ = rotation.z ?? 0
+
+  if (items.length === 0 || (rotationX === 0 && rotationY === 0 && rotationZ === 0)) {
     return items
   }
 
@@ -49,19 +51,15 @@ export function rotateItemsInWorkingCoordinate(
   }
   // 否则保持为单位矩阵
 
-  // 2. 在工作坐标系局部空间构建单轴旋转矩阵 L
+  // 2. 在工作坐标系局部空间构建组合旋转矩阵 L
   const localRotationMatrix = new Matrix4()
-  const angleRad = (angleDeg * Math.PI) / 180
-
-  if (axis === 'x') {
-    localRotationMatrix.makeRotationX(angleRad)
-  } else if (axis === 'y') {
-    localRotationMatrix.makeRotationY(angleRad)
-  } else {
-    // axis === 'z'
-    // Z 轴旋转角度取反，与 Gizmo 的约定一致
-    localRotationMatrix.makeRotationZ(-angleRad)
-  }
+  const localEuler = new Euler(
+    (rotationX * Math.PI) / 180,
+    (rotationY * Math.PI) / 180,
+    -(rotationZ * Math.PI) / 180,
+    'ZYX'
+  )
+  localRotationMatrix.makeRotationFromEuler(localEuler)
 
   // 3. 转换到世界空间：worldRotation = W × L × W⁻¹
   const worldRotationMatrix = new Matrix4()
@@ -105,27 +103,4 @@ export function rotateItemsInWorkingCoordinate(
       rotation: newData.rotation,
     }
   })
-}
-
-/**
- * 从旋转参数对象中提取单轴旋转信息
- *
- * @param rotation 旋转参数对象
- * @returns { axis, angle } 或 null（如果没有旋转）
- */
-export function extractSingleAxisRotation(rotation: {
-  x?: number
-  y?: number
-  z?: number
-}): { axis: 'x' | 'y' | 'z'; angle: number } | null {
-  if (rotation.x !== undefined && rotation.x !== 0) {
-    return { axis: 'x', angle: rotation.x }
-  }
-  if (rotation.y !== undefined && rotation.y !== 0) {
-    return { axis: 'y', angle: rotation.y }
-  }
-  if (rotation.z !== undefined && rotation.z !== 0) {
-    return { axis: 'z', angle: rotation.z }
-  }
-  return null
 }

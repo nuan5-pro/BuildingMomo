@@ -1,4 +1,4 @@
-import { rotateItemsInWorkingCoordinate, extractSingleAxisRotation } from './rotationTransform'
+import { rotateItemsInWorkingCoordinate } from './rotationTransform'
 import type { AppItem, TransformParams } from '@/types/editor'
 
 /**
@@ -64,13 +64,16 @@ export function applyTransformToItems(
     }
   }
 
-  const rotationInfo = mode === 'relative' && rotation ? extractSingleAxisRotation(rotation) : null
-  const rotatedItemsMap = rotationInfo
+  const hasRelativeRotation =
+    mode === 'relative' &&
+    !!rotation &&
+    ((rotation.x ?? 0) !== 0 || (rotation.y ?? 0) !== 0 || (rotation.z ?? 0) !== 0)
+
+  const rotatedItemsMap = hasRelativeRotation
     ? new Map(
         rotateItemsInWorkingCoordinate(
           items,
-          rotationInfo.axis,
-          rotationInfo.angle,
+          rotation,
           rotationCenter,
           effectiveWorkingRotation,
           false
