@@ -256,11 +256,16 @@ export const enLocale = {
     moveToTop: 'Move to Top',
     moveUp: 'Move Up',
     moveDown: 'Move Down',
+    moveToGroup: 'Move to Group',
     emptyGroup: 'No schemes in this group',
     loading: 'Loading Scheme Sets...',
     itemCount: '{n} items',
     defaultGroupLocked: 'Default group cannot be deleted',
     groupNotEmpty: 'Group is not empty. Move or delete its schemes first.',
+    deleteGroupConfirm: {
+      title: 'Delete group "{name}"?',
+      description: 'All schemes in this group will be deleted. This action cannot be undone.',
+    },
     updateConfirm: {
       title: 'Update "{name}"?',
       description: 'This will overwrite its contents with the current scheme.',
@@ -268,6 +273,8 @@ export const enLocale = {
     toast: {
       saved: 'Saved to Scheme Sets',
       updated: 'Scheme Set entry updated',
+      moved: 'Moved to "{group}"',
+      groupDeleted: 'Group and its schemes deleted',
     },
   },
 

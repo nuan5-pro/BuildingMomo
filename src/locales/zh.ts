@@ -252,11 +252,16 @@ export const zhLocale = {
     moveToTop: '移至顶部',
     moveUp: '上移',
     moveDown: '下移',
+    moveToGroup: '移动到分组',
     emptyGroup: '当前分组暂无方案',
     loading: '正在读取方案集...',
     itemCount: '{n} 个物品',
     defaultGroupLocked: '默认分组不可删除',
     groupNotEmpty: '分组不为空，请先移走或删除其中的方案',
+    deleteGroupConfirm: {
+      title: '删除分组“{name}”？',
+      description: '会同时删除分组内所有方案，此操作不可撤销。',
+    },
     updateConfirm: {
       title: '更新“{name}”？',
       description: '会用当前方案覆盖它的内容。',
@@ -264,6 +269,8 @@ export const zhLocale = {
     toast: {
       saved: '已保存到方案集',
       updated: '已更新方案集条目',
+      moved: '已移动到“{group}”',
+      groupDeleted: '分组及其方案已删除',
     },
   },
 

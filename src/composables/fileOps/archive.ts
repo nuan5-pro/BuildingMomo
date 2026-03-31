@@ -376,10 +376,25 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
       }
       if (!(await ensureArchiveIndexLoaded())) return false
 
-      const hasEntries = archiveState.value.index.entries.some((entry) => entry.groupId === groupId)
-      if (hasEntries) {
-        notification.warning(t('archive.groupNotEmpty'))
-        return false
+      const handles = await getArchiveHandles()
+      if (!handles) return false
+
+      const groupEntries = archiveState.value.index.entries.filter(
+        (entry) => entry.groupId === groupId
+      )
+      for (const entry of groupEntries) {
+        try {
+          await (handles.schemesDirHandle as any).removeEntry(entry.schemeFile)
+        } catch (error) {
+          const exceptionName =
+            error && typeof error === 'object' && 'name' in error
+              ? String((error as { name?: unknown }).name)
+              : ''
+          // 条目文件可能已被外部删除；这类情况继续清理索引即可。
+          if (exceptionName !== 'NotFoundError') {
+            throw error
+          }
+        }
       }
 
       const nextIndex: ArchiveIndexFile = {
@@ -388,11 +403,19 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
         groups: archiveState.value.index.groups
           .filter((group) => group.id !== groupId)
           .map((group, index) => ({ ...group, order: index })),
+        entries: archiveState.value.index.entries
+          .filter((entry) => entry.groupId !== groupId)
+          .map((item, _, list) => {
+            const before = list.filter((entryItem) => entryItem.groupId === item.groupId)
+            const order = before.findIndex((entryItem) => entryItem.id === item.id)
+            return { ...item, order }
+          }),
       }
 
       if (!(await writeIndexToDisk(nextIndex))) return false
       syncState(nextIndex)
       archiveState.value.selectedGroupId = ARCHIVE_DEFAULT_GROUP_ID
+      notification.success(t('archive.toast.groupDeleted'))
       return true
     })
   }
@@ -653,6 +676,58 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
     })
   }
 
+  async function moveEntryToGroup(entryId: string, targetGroupId: string) {
+    return runExclusive(async () => {
+      if (!(await ensureArchiveIndexLoaded())) return false
+
+      const entry = archiveState.value.index.entries.find((item) => item.id === entryId)
+      if (!entry) return false
+      if (entry.groupId === targetGroupId) return false
+
+      const targetGroup = archiveState.value.index.groups.find(
+        (group) => group.id === targetGroupId
+      )
+      if (!targetGroup) return false
+
+      const sourceGroupId = entry.groupId
+      const now = Date.now()
+      const nextEntries = archiveState.value.index.entries.map((item) => {
+        if (item.id === entryId) {
+          return {
+            ...item,
+            groupId: targetGroupId,
+            order: 0,
+            updatedAt: now,
+          }
+        }
+        if (item.groupId === targetGroupId) {
+          return { ...item, order: item.order + 1 }
+        }
+        return item
+      })
+
+      const nextIndex: ArchiveIndexFile = {
+        ...archiveState.value.index,
+        updatedAt: now,
+        entries: nextEntries.sort(compareByOrder).map((item, _, list) => {
+          const groupItems = list.filter((entryItem) => entryItem.groupId === item.groupId)
+          const order = groupItems.findIndex((entryItem) => entryItem.id === item.id)
+          // 对来源组和目标组做组内重排，其他分组保持原顺序。
+          if (item.groupId === sourceGroupId || item.groupId === targetGroupId) {
+            return { ...item, order }
+          }
+          return item
+        }),
+      }
+
+      if (!(await writeIndexToDisk(nextIndex))) return false
+      syncState(nextIndex)
+      archiveState.value.selectedGroupId = targetGroupId
+      notification.success(t('archive.toast.moved', { group: targetGroup.name }))
+      return true
+    })
+  }
+
   return {
     archiveState,
     loadArchiveIndex,
@@ -668,5 +743,6 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
     renameEntry,
     deleteEntry,
     moveEntry,
+    moveEntryToGroup,
   }
 }

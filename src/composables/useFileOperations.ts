@@ -332,5 +332,6 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
     renameArchiveEntry: archiveOps.renameEntry,
     deleteArchiveEntry: archiveOps.deleteEntry,
     moveArchiveEntry: archiveOps.moveEntry,
+    moveArchiveEntryToGroup: archiveOps.moveEntryToGroup,
   }
 }

@@ -8,6 +8,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useI18n } from '@/composables/useI18n'
@@ -26,6 +29,7 @@ import {
   MoreHorizontal,
   RefreshCw,
   ArrowUpToLine,
+  FolderInput,
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -151,7 +155,21 @@ async function submitRenameEntry(entryId: string) {
 }
 
 function canDeleteGroup(groupId: string) {
-  return groupId !== ARCHIVE_DEFAULT_GROUP_ID && (groupCounts.value.get(groupId) ?? 0) === 0
+  return groupId !== ARCHIVE_DEFAULT_GROUP_ID
+}
+
+async function handleDeleteGroup(groupId: string, groupName: string) {
+  if (!canDeleteGroup(groupId)) return
+
+  const confirmed = await notification.confirm({
+    title: t('archive.deleteGroupConfirm.title', { name: groupName }),
+    description: t('archive.deleteGroupConfirm.description'),
+    confirmText: t('common.delete'),
+    cancelText: t('common.cancel'),
+  })
+  if (!confirmed) return
+
+  await commandStore.fileOps.deleteArchiveGroup(groupId)
 }
 
 async function handleSaveCurrentScheme() {
@@ -181,6 +199,14 @@ async function handleUpdateArchiveEntry(entryId: string) {
   if (!confirmed) return
 
   await commandStore.fileOps.updateArchiveEntryFromScheme(entryId, editorStore.activeScheme.id)
+}
+
+function getMoveTargetGroups(currentGroupId: string) {
+  return groups.value.filter((group) => group.id !== currentGroupId)
+}
+
+async function handleMoveEntryToGroup(entryId: string, targetGroupId: string) {
+  await commandStore.fileOps.moveArchiveEntryToGroup(entryId, targetGroupId)
 }
 
 // 默认分组固定存在，避免右键“保存到方案集”没有落点。
@@ -308,7 +334,7 @@ async function handleUpdateArchiveEntry(entryId: string) {
                         <DropdownMenuItem
                           :disabled="!canDeleteGroup(group.id)"
                           class="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                          @click="commandStore.fileOps.deleteArchiveGroup(group.id)"
+                          @click="handleDeleteGroup(group.id, group.name)"
                         >
                           <Trash2 class="mr-2 h-4 w-4" />
                           {{ t('common.delete') }}
@@ -395,10 +421,7 @@ async function handleUpdateArchiveEntry(entryId: string) {
                     <span>{{ formatEntryTime(entry.updatedAt) }}</span>
                   </div>
                 </div>
-                <div
-                  class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
-                  @click.stop
-                >
+                <div class="flex shrink-0 items-center gap-1" @click.stop>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -441,6 +464,23 @@ async function handleUpdateArchiveEntry(entryId: string) {
                         <ChevronDown class="mr-2 h-4 w-4" />
                         {{ t('archive.moveDown') }}
                       </DropdownMenuItem>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger
+                          :disabled="getMoveTargetGroups(entry.groupId).length === 0"
+                        >
+                          <FolderInput class="mr-4 h-4 w-4" />
+                          {{ t('archive.moveToGroup') }}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent class="w-40">
+                          <DropdownMenuItem
+                            v-for="targetGroup in getMoveTargetGroups(entry.groupId)"
+                            :key="targetGroup.id"
+                            @click="handleMoveEntryToGroup(entry.id, targetGroup.id)"
+                          >
+                            {{ targetGroup.name }}
+                          </DropdownMenuItem>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem @click="beginRenameEntry(entry.id, entry.name)">
                         <Pencil class="mr-2 h-4 w-4" />
