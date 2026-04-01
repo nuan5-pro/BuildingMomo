@@ -33,6 +33,7 @@ import {
   X,
   Archive as ArchiveIcon,
   Cloud,
+  CloudAlert,
   Settings,
   BookOpen,
   FolderSearch,
@@ -51,6 +52,7 @@ import CloudSchemePopover from './CloudSchemePopover.vue'
 import CloudSchemeDialog from './CloudSchemeDialog.vue'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
 
 // 使用命令系統 Store
 const commandStore = useCommandStore()
@@ -58,7 +60,16 @@ const editorStore = useEditorStore()
 const tabStore = useTabStore()
 const settingsStore = useSettingsStore()
 const notificationStore = useNotificationStore()
+const cloudSchemeStore = useCloudSchemeStore()
 const { t } = useI18n()
+
+const isActiveCloudStatusDisconnected = computed(() => {
+  const activeId = editorStore.activeSchemeId
+  const scheme = editorStore.activeScheme
+  if (!scheme || scheme.source.value !== 'cloud' || !activeId) return false
+  const status = cloudSchemeStore.schemeId === activeId ? cloudSchemeStore.status : 'disconnected'
+  return status === 'disconnected'
+})
 
 // 粗指针（触屏等）：右侧显示复制并粘贴 / 撤销 / 重做，不显示选择游戏目录与监控
 const isCoarsePointer = useMediaQuery('(pointer: coarse)')
@@ -1001,11 +1012,15 @@ watch(
             variant="ghost"
             size="sm"
             class="relative w-8 flex-none"
+            :class="
+              isActiveCloudStatusDisconnected ? 'text-destructive hover:text-destructive' : ''
+            "
             :aria-label="t('cloudScheme.title')"
             @mouseenter="isCloudTooltipVisible = true"
             @mouseleave="isCloudTooltipVisible = false"
           >
-            <Cloud class="h-4 w-4" />
+            <CloudAlert v-if="isActiveCloudStatusDisconnected" class="h-4 w-4" />
+            <Cloud v-else class="h-4 w-4" />
             <Transition name="watch-tooltip">
               <div
                 v-if="isCloudTooltipVisible && !isToolbarPopoverOpen"

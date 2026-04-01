@@ -6,6 +6,7 @@ import type {
   PatchItemChange,
   SchemeMetaState,
 } from '@/types/editor'
+import type { CloudHistoryItemBuckets } from '@/types/cloudScheme'
 
 // ========== 零拷贝快照：只存引用 ==========
 
@@ -268,6 +269,70 @@ export function collectTransactionTouchedItemIds(transaction: EditorTransaction)
   }
 
   return touchedIds
+}
+
+/**
+ * 从一笔 EditorTransaction 拆出三类物品 id，供云方案 Popover「同步历史」使用。
+ * 与 collectTransactionTouchedItemIds 不同：这里分新增/删除/修补，且同类里同一 id 只出现一次
+ * （例如连续移动同一物 8 次 → patched 里仍只有 1 个 id）。
+ */
+export function collectTransactionItemBuckets(
+  transaction: EditorTransaction
+): CloudHistoryItemBuckets {
+  const added = new Set<string>()
+  const removed = new Set<string>()
+  const patched = new Set<string>()
+
+  for (const operation of transaction.ops) {
+    if (operation.type === 'add_items') {
+      for (const item of operation.items) {
+        added.add(item.internalId)
+      }
+    } else if (operation.type === 'remove_items') {
+      for (const item of operation.items) {
+        removed.add(item.internalId)
+      }
+    } else if (operation.type === 'patch_items') {
+      for (const change of operation.changes) {
+        patched.add(change.itemId)
+      }
+    }
+  }
+
+  return {
+    added: [...added],
+    removed: [...removed],
+    patched: [...patched],
+  }
+}
+
+/**
+ * 由 buckets 生成界面用的四个数：
+ * 前三个是各集合大小；itemCount 是 added∪removed∪patched 的大小（同一物只跨类算一次「涉及物品」）。
+ */
+export function cloudHistoryCountsFromItemBuckets(buckets: CloudHistoryItemBuckets) {
+  const a = new Set(buckets.added)
+  const r = new Set(buckets.removed)
+  const p = new Set(buckets.patched)
+  const union = new Set([...a, ...r, ...p])
+  return {
+    addedCount: a.size,
+    removedCount: r.size,
+    updatedCount: p.size,
+    itemCount: union.size,
+  }
+}
+
+/** 合并两条历史记录的 buckets：三类分别做集合并集，用于 Popover 相邻 remote_tx 折叠。 */
+export function unionCloudHistoryItemBuckets(
+  left: CloudHistoryItemBuckets,
+  right: CloudHistoryItemBuckets
+): CloudHistoryItemBuckets {
+  return {
+    added: [...new Set([...left.added, ...right.added])],
+    removed: [...new Set([...left.removed, ...right.removed])],
+    patched: [...new Set([...left.patched, ...right.patched])],
+  }
 }
 
 // ========== 事务应用解析器：将打包的步骤释放运行施加在实体场景 ==========

@@ -1,11 +1,15 @@
 import { computed, ref, triggerRef, watch } from 'vue'
-import { collectTransactionTouchedItemIds } from '@/lib/editorTransactions'
+import {
+  applyEditorTransactionToScheme,
+  cloudHistoryCountsFromItemBuckets,
+  collectTransactionItemBuckets,
+  collectTransactionTouchedItemIds,
+} from '@/lib/editorTransactions'
 import { useEditorStore } from '@/stores/editorStore'
 import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
 import { useEditorHistory } from '@/composables/editor/useEditorHistory'
 import { useNotification } from '@/composables/useNotification'
 import { useI18n } from '@/composables/useI18n'
-import { applyEditorTransactionToScheme } from '@/lib/editorTransactions'
 import { buildSharedSchemeSnapshot } from '@/lib/schemeSnapshot'
 import type {
   CloudSchemeDocument,
@@ -13,6 +17,7 @@ import type {
   CloudWsIncomingMessage,
   CreateCloudSchemeResponse,
 } from '@/types/cloudScheme'
+import type { EditorTransaction } from '@/types/editor'
 
 const DISPLAY_NAME_STORAGE_KEY = 'cloud_scheme_display_name'
 
@@ -157,6 +162,7 @@ export function useCloudSchemeSync() {
       : `cloud_evt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
   }
 
+  /** 写入云方案 Pinia 历史列表；remote_tx 可带 itemBuckets 供 UI 按物品去重合并 */
   function appendHistoryEvent(
     event: Omit<
       Parameters<typeof cloudStore.appendHistoryEvent>[0],
@@ -183,33 +189,8 @@ export function useCloudSchemeSync() {
       addedCount: event.addedCount,
       removedCount: event.removedCount,
       updatedCount: event.updatedCount,
+      itemBuckets: event.itemBuckets,
     })
-  }
-
-  function summarizeRemoteTransaction(transaction: { ops: unknown[] }) {
-    let addedCount = 0
-    let removedCount = 0
-    let updatedCount = 0
-
-    for (const operation of transaction.ops) {
-      if (!operation || typeof operation !== 'object') continue
-      const maybeOperation = operation as {
-        type?: string
-        items?: unknown[]
-        changes?: unknown[]
-      }
-
-      if (maybeOperation.type === 'add_items') {
-        addedCount += Array.isArray(maybeOperation.items) ? maybeOperation.items.length : 0
-      } else if (maybeOperation.type === 'remove_items') {
-        removedCount += Array.isArray(maybeOperation.items) ? maybeOperation.items.length : 0
-      } else if (maybeOperation.type === 'patch_items') {
-        updatedCount += Array.isArray(maybeOperation.changes) ? maybeOperation.changes.length : 0
-      }
-    }
-
-    const itemCount = addedCount + removedCount + updatedCount
-    return { itemCount, addedCount, removedCount, updatedCount }
   }
 
   function appendPresenceHistory(users: { clientId: string; displayName: string }[]) {
@@ -398,33 +379,39 @@ export function useCloudSchemeSync() {
       case 'snapshot':
         applyRemoteDocument(message.document, session)
         return
-      case 'tx_committed':
+      case 'tx_committed': {
         cloudStore.revision = message.revision
         cloudStore.status = 'connected'
         applyCommittedTransaction(message.transaction)
 
-        if (message.authorClientId === session.clientId) {
+        const isOwn = message.authorClientId === session.clientId
+        // 撤销栈是否标脏：看谁 touch 了哪些 id（与历史展示的 buckets 正交）
+        const touchedItemIds = collectTransactionTouchedItemIds(message.transaction)
+        // 历史列表：按物品 id 分桶 + 派生 count，避免「8 次移动同一物」显示成 8 个更新
+        const itemBuckets = collectTransactionItemBuckets(message.transaction as EditorTransaction)
+        const counts = cloudHistoryCountsFromItemBuckets(itemBuckets)
+
+        if (isOwn) {
           editorStore.acknowledgePendingTransaction(message.transaction.id)
           markTransactionCommitted(message.transaction.schemeId, message.transaction.id)
           session.inFlightTransactionId = null
+        } else {
+          markTransactionsStale(message.transaction.schemeId, touchedItemIds)
         }
 
-        if (message.authorClientId !== session.clientId) {
-          const touchedItemIds = collectTransactionTouchedItemIds(message.transaction)
-          const transactionSummary = summarizeRemoteTransaction(message.transaction)
-          markTransactionsStale(message.transaction.schemeId, touchedItemIds)
-          appendHistoryEvent({
-            type: 'remote_tx',
-            actorClientId: message.authorClientId,
-            itemCount: transactionSummary.itemCount || touchedItemIds.size,
-            addedCount: transactionSummary.addedCount,
-            removedCount: transactionSummary.removedCount,
-            updatedCount: transactionSummary.updatedCount,
-          })
-        }
+        appendHistoryEvent({
+          type: 'remote_tx',
+          actorClientId: message.authorClientId,
+          itemCount: counts.itemCount,
+          addedCount: counts.addedCount,
+          removedCount: counts.removedCount,
+          updatedCount: counts.updatedCount,
+          itemBuckets,
+        })
 
         void flushPendingTransactions()
         return
+      }
     }
   }
 

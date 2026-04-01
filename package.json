@@ -16,8 +16,7 @@
     "dev:cloud-sync-worker": "wrangler dev --config cloud-sync-worker/wrangler.jsonc",
     "dev:cloudflare-functions": "wrangler pages dev . --port 8788",
     "deploy:cloud-sync-worker": "wrangler deploy --config cloud-sync-worker/wrangler.jsonc",
-    "deploy:cloudflare": "npm run build:secure && wrangler pages deploy dist --project-name buildingmomo-lab",
-    "deploy:netlify": "netlify deploy --prod"
+    "deploy:cloudflare": "npm run build:secure && wrangler pages deploy dist --project-name buildingmomo-lab"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

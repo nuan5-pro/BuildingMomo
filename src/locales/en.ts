@@ -310,6 +310,7 @@ export const enLocale = {
     helper:
       'This version syncs transactions in order; if another collaborator changes the same items, the latest shared undo may become unavailable.',
     statusHint: 'Connection status for the current cloud scheme.',
+    statusBarClickReconnect: 'Click to reconnect',
     history: {
       title: 'Sync History',
       empty: 'No sync records yet',
@@ -317,8 +318,11 @@ export const enLocale = {
       remoteTxUpdated: '{actor} updated {n} items',
       remoteTxAdded: '{actor} added {n} items',
       remoteTxRemoved: '{actor} removed {n} items',
-      remoteTxMixed:
-        '{actor} changed {total} items (added {add} / removed {remove} / updated {update})',
+      remoteTxMixed: '{actor} changed {total} items ({detail})',
+      remoteTxMixedSegAdd: 'added {n}',
+      remoteTxMixedSegRemove: 'removed {n}',
+      remoteTxMixedSegUpdate: 'updated {n}',
+      remoteTxMixedJoiner: ' / ',
       userJoined: '{actor} joined collaboration',
       userLeft: '{actor} left collaboration',
       connected: 'Collaboration connected',

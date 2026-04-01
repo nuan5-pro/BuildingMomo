@@ -29,16 +29,34 @@ export type CloudHistoryEventType =
   | 'reconnected'
   | 'conflict_reload'
 
+/**
+ * 云同步历史里一笔「远程事务」涉及的物品 id，按操作语义分三类（云 Popover 里按「几个物品」展示、合并时做并集去重）。
+ * - added：add_items 里的 internalId
+ * - removed：remove_items
+ * - patched：patch_items 里的 itemId（同一物品多次 patch 只保留一个 id）
+ */
+export interface CloudHistoryItemBuckets {
+  added: string[]
+  removed: string[]
+  patched: string[]
+}
+
 export interface CloudHistoryEvent {
   id: string
   type: CloudHistoryEventType
   createdAt: number
   actorClientId?: string
   actorDisplayName?: string
+  /** 展示/混合统计用数字；有 itemBuckets 时应与 buckets 派生值一致 */
   itemCount?: number
   addedCount?: number
   removedCount?: number
   updatedCount?: number
+  /**
+   * 仅 remote_tx 使用。存在时 Popover 合并相邻记录会按 id 并集去重；
+   * 旧会话无此字段时合并回退为「数字相加」。
+   */
+  itemBuckets?: CloudHistoryItemBuckets
 }
 
 export interface CreateCloudSchemeResponse {

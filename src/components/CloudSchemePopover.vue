@@ -9,7 +9,12 @@ import { useNotification } from '@/composables/useNotification'
 import { useEditorStore } from '@/stores/editorStore'
 import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
 import type { CloudHistoryEvent } from '@/types/cloudScheme'
+import {
+  cloudHistoryCountsFromItemBuckets,
+  unionCloudHistoryItemBuckets,
+} from '@/lib/editorTransactions'
 import { joinOnlineDisplayNames } from '@/lib/cloudPresence'
+import CloudSchemeHistoryTruncatedLabel from '@/components/CloudSchemeHistoryTruncatedLabel.vue'
 
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
@@ -46,12 +51,17 @@ const showReconnectAction = computed(
   () => !!currentCloudScheme.value && !isLiveConnected.value && !isConnectingSession.value
 )
 
+const isSessionDisconnected = computed(() => currentCloudScheme.value?.status === 'disconnected')
+
 const statusButtonClass = computed(() => {
   if (isLiveConnected.value) {
     return 'bg-green-500/15 text-green-600 hover:bg-destructive hover:text-destructive-foreground dark:bg-green-500/20 dark:text-green-400'
   }
   if (isConnectingSession.value) {
     return 'cursor-not-allowed bg-muted text-muted-foreground opacity-80'
+  }
+  if (isSessionDisconnected.value) {
+    return 'bg-destructive/15 text-destructive hover:bg-green-500/15 hover:text-green-600 dark:bg-destructive/20 dark:text-destructive dark:hover:bg-green-500/20 dark:hover:text-green-400'
   }
   return 'bg-green-500/15 text-green-600 hover:bg-green-500/25 dark:bg-green-500/20 dark:text-green-400'
 })
@@ -63,6 +73,9 @@ const sessionActionLabel = computed(() => {
   }
   if (isConnectingSession.value) {
     return t('cloudScheme.status.connecting')
+  }
+  if (isSessionDisconnected.value) {
+    return t('cloudScheme.status.disconnected')
   }
   return t('cloudScheme.reconnect')
 })
@@ -99,6 +112,7 @@ function formatRelativeTime(timestamp: number): string {
   return t('watchMode.history.daysAgo', { n: days })
 }
 
+/** 单条历史的人类可读文案；remote_tx 的 n 来自已去重/合并后的 count */
 function getHistoryLabel(event: CloudHistoryEvent): string {
   const actorName = event.actorDisplayName || t('cloudScheme.history.fallbackActor')
 
@@ -119,12 +133,19 @@ function getHistoryLabel(event: CloudHistoryEvent): string {
         })
       }
 
+      const segments: string[] = []
+      if (added > 0) segments.push(t('cloudScheme.history.remoteTxMixedSegAdd', { n: added }))
+      if (removed > 0)
+        segments.push(t('cloudScheme.history.remoteTxMixedSegRemove', { n: removed }))
+      if (updated > 0)
+        segments.push(t('cloudScheme.history.remoteTxMixedSegUpdate', { n: updated }))
+
+      const detail = segments.join(t('cloudScheme.history.remoteTxMixedJoiner'))
+
       return t('cloudScheme.history.remoteTxMixed', {
         actor: actorName,
         total: event.itemCount || added + removed + updated,
-        add: added,
-        remove: removed,
-        update: updated,
+        detail,
       })
     }
     case 'user_joined':
@@ -142,12 +163,16 @@ function getHistoryLabel(event: CloudHistoryEvent): string {
   }
 }
 
+/**
+ * 自上而下遍历云 store 里的历史（新在前）。仅当两条 remote_tx「相邻、同一人、相对时间同档（如都是刚刚）」时尝试合成一条。
+ * - 两条都有 itemBuckets：三类 id 分别并集再算 count，实现跨多条事务的「同一物只算一次」。
+ * - 任一条无 buckets（旧数据）：扔掉 buckets，改回把四个数字简单相加，避免和残缺 id 混算。
+ */
 function mergeAdjacentHistoryEvents(events: CloudHistoryEvent[]): DisplayHistoryEvent[] {
   const merged: DisplayHistoryEvent[] = []
 
   for (const event of events) {
     const timeLabel = formatRelativeTime(event.createdAt)
-    const textLabel = getHistoryLabel(event)
     const previous = merged.length > 0 ? merged[merged.length - 1] : undefined
 
     if (!previous) {
@@ -156,11 +181,30 @@ function mergeAdjacentHistoryEvents(events: CloudHistoryEvent[]): DisplayHistory
     }
 
     const previousTimeLabel = formatRelativeTime(previous.createdAt)
-    const previousTextLabel = getHistoryLabel(previous)
-    const canMerge = previous.type === 'remote_tx' && event.type === 'remote_tx'
-    const sameText = previousTextLabel === textLabel && previousTimeLabel === timeLabel
+    const canMergeRemoteTx =
+      previous.type === 'remote_tx' &&
+      event.type === 'remote_tx' &&
+      previousTimeLabel === timeLabel &&
+      previous.actorClientId === event.actorClientId
 
-    if (canMerge && sameText) {
+    if (canMergeRemoteTx) {
+      const pb = previous.itemBuckets
+      const eb = event.itemBuckets
+      if (pb && eb) {
+        const ub = unionCloudHistoryItemBuckets(pb, eb)
+        const counts = cloudHistoryCountsFromItemBuckets(ub)
+        previous.itemBuckets = ub
+        previous.addedCount = counts.addedCount
+        previous.removedCount = counts.removedCount
+        previous.updatedCount = counts.updatedCount
+        previous.itemCount = counts.itemCount
+        previous.createdAt = Math.max(previous.createdAt, event.createdAt)
+        previous.mergedCount += 1
+        continue
+      }
+
+      // 缺 buckets 的降级：与旧版行为一致（可能与真实「物品数」有偏差）
+      delete previous.itemBuckets
       previous.itemCount = (previous.itemCount || 0) + (event.itemCount || 0)
       previous.addedCount = (previous.addedCount || 0) + (event.addedCount || 0)
       previous.removedCount = (previous.removedCount || 0) + (event.removedCount || 0)
@@ -298,9 +342,7 @@ async function handleSessionAction() {
           :key="event.id"
           class="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent/50"
         >
-          <span class="min-w-0 flex-1 truncate text-xs">
-            {{ getHistoryLabel(event) }}
-          </span>
+          <CloudSchemeHistoryTruncatedLabel :text="getHistoryLabel(event)" />
           <span class="shrink-0 text-xs text-muted-foreground">
             {{ formatRelativeTime(event.createdAt) }}
           </span>

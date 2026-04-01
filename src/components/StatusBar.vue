@@ -11,8 +11,19 @@ import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
 import { joinOnlineDisplayNames } from '@/lib/cloudPresence'
 import type { CloudPresenceUser } from '@/types/cloudScheme'
 import { useI18n } from '@/composables/useI18n'
+import { useNotification } from '@/composables/useNotification'
+import { useCloudSchemeSync } from '@/composables/useCloudSchemeSync'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Copy, AlertTriangle, Layers, EyeOff, Maximize2, RotateCw, Cloud } from 'lucide-vue-next'
+import {
+  Copy,
+  AlertTriangle,
+  Layers,
+  EyeOff,
+  Maximize2,
+  RotateCw,
+  Cloud,
+  CloudAlert,
+} from 'lucide-vue-next'
 import { MAX_RENDER_INSTANCES } from '@/types/constants'
 import SchemeSettingsDialog from './SchemeSettingsDialog.vue'
 
@@ -31,6 +42,8 @@ const uiStore = useUIStore()
 const commandStore = useCommandStore()
 const settingsStore = useSettingsStore()
 const cloudSchemeStore = useCloudSchemeStore()
+const notification = useNotification()
+const { reconnectActiveCloudScheme, getStoredDisplayName } = useCloudSchemeSync()
 const { t } = useI18n()
 
 // 方案设置对话框状态
@@ -209,9 +222,7 @@ const cloudPendingTransactionCount = computed(() => editorStore.cloudPendingCoun
 const cloudUndoStale = computed(() => editorStore.hasStaleUndo)
 
 const cloudStatusLabel = computed(() => {
-  const raw = currentCloudStatus.value
-  const key = raw === 'syncing' ? 'connected' : raw
-  return t(`cloudScheme.status.${key}`)
+  return t(`cloudScheme.status.${currentCloudStatus.value}`)
 })
 
 const showCloudOnlineSummary = computed(() => currentCloudStatus.value !== 'disconnected')
@@ -228,6 +239,10 @@ const cloudStatusTooltip = computed(() => {
   const isActiveRoom = cloudSchemeStore.schemeId === editorStore.activeSchemeId
   const users: CloudPresenceUser[] = isActiveRoom ? cloudSchemeStore.users : []
   const lines: string[] = []
+
+  if (currentCloudStatus.value === 'disconnected') {
+    lines.push(t('cloudScheme.statusBarClickReconnect'))
+  }
 
   if (showCloudOnlineSummary.value) {
     if (users.length === 0) {
@@ -252,6 +267,28 @@ const cloudStatusTooltip = computed(() => {
 
   return lines.join('\n')
 })
+
+async function handleCloudStatusClick() {
+  if (currentCloudStatus.value !== 'disconnected') return
+
+  const scheme = editorStore.activeScheme
+  if (!scheme || scheme.source.value !== 'cloud') return
+
+  const roomCode = (scheme.cloudRoomCode.value || '').trim()
+  if (!roomCode) {
+    notification.error(t('cloudScheme.error.invalidRoomCode'))
+    return
+  }
+  if (!getStoredDisplayName().trim()) {
+    notification.error(t('cloudScheme.error.invalidDisplayName'))
+    return
+  }
+
+  const ok = await reconnectActiveCloudScheme()
+  if (!ok) {
+    notification.error(t('cloudScheme.error.connectFailed'))
+  }
+}
 </script>
 
 <template>
@@ -293,9 +330,16 @@ const cloudStatusTooltip = computed(() => {
         <Tooltip v-if="isCloudSchemeActive">
           <TooltipTrigger as-child>
             <div
-              class="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground"
+              class="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs"
+              :class="
+                currentCloudStatus === 'disconnected'
+                  ? 'cursor-pointer text-destructive hover:bg-accent'
+                  : 'text-muted-foreground'
+              "
+              @click="handleCloudStatusClick"
             >
-              <Cloud :size="14" />
+              <CloudAlert v-if="currentCloudStatus === 'disconnected'" :size="14" />
+              <Cloud v-else :size="14" />
               <span>{{ cloudStatusLabel }}</span>
               <template v-if="showCloudOnlineSummary">
                 <span>·</span>
