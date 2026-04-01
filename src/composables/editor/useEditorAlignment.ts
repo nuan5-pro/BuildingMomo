@@ -47,7 +47,7 @@ export function useEditorAlignment() {
   const settingsStore = useSettingsStore()
   const gameDataStore = useGameDataStore()
   const { activeScheme } = storeToRefs(store)
-  const { saveHistory } = useEditorHistory()
+  const { recordTransaction } = useEditorHistory()
 
   /**
    * 获取当前选区可用的组合原点上下文
@@ -207,31 +207,27 @@ export function useEditorAlignment() {
       if (selectedIds.size < 2) return
     }
 
-    saveHistory('edit')
+    recordTransaction(`align.${axis}.${mode}`, () => {
+      const currentMode = settingsStore.settings.threeDisplayMode
 
-    const currentMode = settingsStore.settings.threeDisplayMode
+      if (referenceItemId) {
+        const targetMode = uiStore.alignReferencePosition
 
-    // 如果有参照物，使用参照物对齐逻辑
-    if (referenceItemId) {
-      const targetMode = uiStore.alignReferencePosition
+        if (currentMode === 'simple-box' || currentMode === 'icon') {
+          alignToReferenceByCenterPoint(selectedIds, axis, referenceItemId)
+        } else {
+          alignToReferenceByBoundingBox(selectedIds, axis, mode, referenceItemId, targetMode)
+        }
+        return
+      }
 
       if (currentMode === 'simple-box' || currentMode === 'icon') {
-        // 中心点模式：固定使用中心对中心对齐，不需要 mode 参数
-        alignToReferenceByCenterPoint(selectedIds, axis, referenceItemId)
-      } else {
-        alignToReferenceByBoundingBox(selectedIds, axis, mode, referenceItemId, targetMode)
+        alignByCenterPoint(selectedIds, axis, mode)
+        return
       }
-      return
-    }
 
-    // 快速路径：simple-box / icon 模式使用中心点对齐
-    if (currentMode === 'simple-box' || currentMode === 'icon') {
-      alignByCenterPoint(selectedIds, axis, mode)
-      return
-    }
-
-    // Box / Model 模式：使用包围盒对齐
-    alignByBoundingBox(selectedIds, axis, mode)
+      alignByBoundingBox(selectedIds, axis, mode)
+    })
   }
 
   /**
@@ -679,80 +675,80 @@ export function useEditorAlignment() {
     const selectedIds = scheme.selectedItemIds.value
     if (selectedIds.size < 3) return // 至少需要3个物品
 
-    saveHistory('edit')
+    recordTransaction(`distribute.${axis}`, () => {
+      // 按组聚合选中物品
+      const alignUnits = buildAlignUnits(selectedIds)
 
-    // 按组聚合选中物品
-    const alignUnits = buildAlignUnits(selectedIds)
+      // 为每个对齐单元计算中心点（工作坐标系）
+      const unitsWithCenter = alignUnits.map((unit) => {
+        // 计算单元的中心（所有成员的平均位置）
+        const sum = { x: 0, y: 0, z: 0 }
+        unit.items.forEach((item) => {
+          sum.x += item.x
+          sum.y += item.y
+          sum.z += item.z
+        })
 
-    // 为每个对齐单元计算中心点（工作坐标系）
-    const unitsWithCenter = alignUnits.map((unit) => {
-      // 计算单元的中心（所有成员的平均位置）
-      const sum = { x: 0, y: 0, z: 0 }
-      unit.items.forEach((item) => {
-        sum.x += item.x
-        sum.y += item.y
-        sum.z += item.z
+        const dataCenter = {
+          x: sum.x / unit.items.length,
+          y: sum.y / unit.items.length,
+          z: sum.z / unit.items.length,
+        }
+
+        // 使用 uiStore 统一 API 转换：数据空间 -> 工作坐标系
+        const workingCenter = uiStore.dataToWorking(dataCenter)
+
+        return { unit, workingCenter }
       })
 
-      const dataCenter = {
-        x: sum.x / unit.items.length,
-        y: sum.y / unit.items.length,
-        z: sum.z / unit.items.length,
-      }
+      // 按指定轴排序
+      unitsWithCenter.sort((a, b) => a.workingCenter[axis] - b.workingCenter[axis])
 
-      // 使用 uiStore 统一 API 转换：数据空间 -> 工作坐标系
-      const workingCenter = uiStore.dataToWorking(dataCenter)
+      // 计算首尾位置
+      const firstUnit = unitsWithCenter[0]
+      const lastUnit = unitsWithCenter[unitsWithCenter.length - 1]
+      if (!firstUnit || !lastUnit) return
 
-      return { unit, workingCenter }
+      const first = firstUnit.workingCenter[axis]
+      const last = lastUnit.workingCenter[axis]
+      const spacing = (last - first) / (unitsWithCenter.length - 1)
+
+      // 为每个单元计算位移增量
+      const unitDeltas = new Map<AlignUnit, { x: number; y: number; z: number }>()
+
+      unitsWithCenter.forEach(({ unit, workingCenter }, index) => {
+        const newValue = first + spacing * index
+        const delta = newValue - workingCenter[axis]
+
+        // 构造工作坐标系下的位移向量
+        const workingDelta = { x: 0, y: 0, z: 0 }
+        workingDelta[axis] = delta
+
+        // 使用 uiStore 统一 API 转换：工作坐标系增量 -> 数据空间增量
+        const dataDelta = uiStore.workingDeltaToData(workingDelta)
+
+        unitDeltas.set(unit, dataDelta)
+      })
+
+      // 应用位移到所有物品
+      activeScheme.value!.items.value = activeScheme.value!.items.value.map((item) => {
+        // 找到该物品所属的对齐单元
+        const unit = alignUnits.find((u) => u.items.some((i) => i.internalId === item.internalId))
+        if (!unit) return item
+
+        const delta = unitDeltas.get(unit)
+        if (!delta) return item
+
+        return {
+          ...item,
+          x: item.x + delta.x,
+          y: item.y + delta.y,
+          z: item.z + delta.z,
+        }
+      })
+
+      store.triggerSceneUpdate()
     })
-
-    // 按指定轴排序
-    unitsWithCenter.sort((a, b) => a.workingCenter[axis] - b.workingCenter[axis])
-
-    // 计算首尾位置
-    const firstUnit = unitsWithCenter[0]
-    const lastUnit = unitsWithCenter[unitsWithCenter.length - 1]
-    if (!firstUnit || !lastUnit) return // 安全检查
-
-    const first = firstUnit.workingCenter[axis]
-    const last = lastUnit.workingCenter[axis]
-    const spacing = (last - first) / (unitsWithCenter.length - 1)
-
-    // 为每个单元计算位移增量
-    const unitDeltas = new Map<AlignUnit, { x: number; y: number; z: number }>()
-
-    unitsWithCenter.forEach(({ unit, workingCenter }, index) => {
-      const newValue = first + spacing * index
-      const delta = newValue - workingCenter[axis]
-
-      // 构造工作坐标系下的位移向量
-      const workingDelta = { x: 0, y: 0, z: 0 }
-      workingDelta[axis] = delta
-
-      // 使用 uiStore 统一 API 转换：工作坐标系增量 -> 数据空间增量
-      const dataDelta = uiStore.workingDeltaToData(workingDelta)
-
-      unitDeltas.set(unit, dataDelta)
-    })
-
-    // 应用位移到所有物品
-    activeScheme.value.items.value = activeScheme.value.items.value.map((item) => {
-      // 找到该物品所属的对齐单元
-      const unit = alignUnits.find((u) => u.items.some((i) => i.internalId === item.internalId))
-      if (!unit) return item
-
-      const delta = unitDeltas.get(unit)
-      if (!delta) return item
-
-      return {
-        ...item,
-        x: item.x + delta.x,
-        y: item.y + delta.y,
-        z: item.z + delta.z,
-      }
-    })
-
-    store.triggerSceneUpdate()
   }
 
   return {

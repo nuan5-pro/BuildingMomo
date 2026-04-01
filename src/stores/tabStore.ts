@@ -117,6 +117,43 @@ export const useTabStore = defineStore('tab', () => {
     }
   }
 
+  function replaceSchemeTabId(oldSchemeId: string, newSchemeId: string, schemeName: string) {
+    if (oldSchemeId === newSchemeId) {
+      updateSchemeTabName(newSchemeId, schemeName)
+      return
+    }
+
+    let primaryTabId: string | null = null
+    const nextTabs: Tab[] = []
+
+    for (const tab of tabs.value) {
+      if (tab.type !== 'scheme' || (tab.schemeId !== oldSchemeId && tab.schemeId !== newSchemeId)) {
+        nextTabs.push(tab)
+        continue
+      }
+
+      if (!primaryTabId) {
+        nextTabs.push({
+          ...tab,
+          schemeId: newSchemeId,
+          title: schemeName,
+        })
+        primaryTabId = tab.id
+        continue
+      }
+
+      if (activeTabId.value === tab.id) {
+        activeTabId.value = primaryTabId
+      }
+    }
+
+    tabs.value = nextTabs
+
+    if (!primaryTabId) {
+      openSchemeTab(newSchemeId, schemeName)
+    }
+  }
+
   /**
    * 更新文档标签的页面
    */
@@ -171,6 +208,7 @@ export const useTabStore = defineStore('tab', () => {
     closeTab,
     setActiveTab,
     updateSchemeTabName,
+    replaceSchemeTabId,
     updateDocPage,
     syncFromSchemes,
     moveTab,

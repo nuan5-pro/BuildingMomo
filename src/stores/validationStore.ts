@@ -6,7 +6,7 @@ import { useEditorHistory } from '../composables/editor/useEditorHistory'
 
 export const useValidationStore = defineStore('validation', () => {
   const editorStore = useEditorStore()
-  const { saveHistory } = useEditorHistory()
+  const { recordSelectionChange } = useEditorHistory()
 
   const { activeScheme } = storeToRefs(editorStore)
 
@@ -83,7 +83,7 @@ export const useValidationStore = defineStore('validation', () => {
   function selectDuplicateItems() {
     if (!activeScheme.value || duplicateGroups.value.length === 0) return
 
-    saveHistory('selection')
+    recordSelectionChange()
     activeScheme.value.selectedItemIds.value.clear()
 
     duplicateGroups.value.forEach((group) => {
@@ -103,7 +103,7 @@ export const useValidationStore = defineStore('validation', () => {
   function selectOutOfBoundsItems() {
     if (!activeScheme.value || limitIssues.value.outOfBoundsItemIds.length === 0) return
 
-    saveHistory('selection')
+    recordSelectionChange()
     activeScheme.value.selectedItemIds.value.clear()
 
     limitIssues.value.outOfBoundsItemIds.forEach((id) => {
@@ -116,7 +116,7 @@ export const useValidationStore = defineStore('validation', () => {
   function selectOversizedGroupItems() {
     if (!activeScheme.value || limitIssues.value.oversizedGroups.length === 0) return
 
-    saveHistory('selection')
+    recordSelectionChange()
     activeScheme.value.selectedItemIds.value.clear()
 
     const targetGroups = new Set(limitIssues.value.oversizedGroups)
@@ -133,7 +133,7 @@ export const useValidationStore = defineStore('validation', () => {
   function selectInvalidScaleItems() {
     if (!activeScheme.value || limitIssues.value.invalidScaleItemIds.length === 0) return
 
-    saveHistory('selection')
+    recordSelectionChange()
     activeScheme.value.selectedItemIds.value.clear()
 
     limitIssues.value.invalidScaleItemIds.forEach((id) => {
@@ -146,7 +146,7 @@ export const useValidationStore = defineStore('validation', () => {
   function selectInvalidRotationItems() {
     if (!activeScheme.value || limitIssues.value.invalidRotationItemIds.length === 0) return
 
-    saveHistory('selection')
+    recordSelectionChange()
     activeScheme.value.selectedItemIds.value.clear()
 
     limitIssues.value.invalidRotationItemIds.forEach((id) => {

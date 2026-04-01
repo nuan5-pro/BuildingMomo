@@ -1,9 +1,11 @@
-import { computed, ref, watch } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
+import { computed, ref, triggerRef, watch } from 'vue'
+import { collectTransactionTouchedItemIds } from '@/lib/editorTransactions'
 import { useEditorStore } from '@/stores/editorStore'
 import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
+import { useEditorHistory } from '@/composables/editor/useEditorHistory'
 import { useNotification } from '@/composables/useNotification'
 import { useI18n } from '@/composables/useI18n'
+import { applyEditorTransactionToScheme } from '@/lib/editorTransactions'
 import { buildSharedSchemeSnapshot } from '@/lib/schemeSnapshot'
 import type {
   CloudSchemeDocument,
@@ -15,9 +17,9 @@ import type {
 const DISPLAY_NAME_STORAGE_KEY = 'cloud_scheme_display_name'
 
 let socket: WebSocket | null = null
-let stopSyncWatch: (() => void) | null = null
+let stopTransactionWatch: (() => void) | null = null
 const isApplyingRemoteUpdate = ref(false)
-const pendingRemoteSyncSkips = ref(0)
+const inFlightTransactionId = ref<string | null>(null)
 
 function createClientId() {
   return crypto.randomUUID()
@@ -43,6 +45,7 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Pro
 export function useCloudSchemeSync() {
   const editorStore = useEditorStore()
   const cloudStore = useCloudSchemeStore()
+  const { markTransactionCommitted, markTransactionsStale } = useEditorHistory()
   const notification = useNotification()
   const { t } = useI18n()
 
@@ -62,10 +65,6 @@ export function useCloudSchemeSync() {
 
   const shareCode = computed(() => currentCloudScheme.value?.roomCode || '')
 
-  const debouncedPushSnapshot = useDebounceFn(() => {
-    pushCurrentSnapshot()
-  }, 500)
-
   function getStoredDisplayName() {
     return localStorage.getItem(DISPLAY_NAME_STORAGE_KEY) || ''
   }
@@ -74,43 +73,37 @@ export function useCloudSchemeSync() {
     localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, name)
   }
 
-  function ensureSceneWatcher() {
-    if (stopSyncWatch) return
+  /**
+   * 监听本地事务变更的 Watcher
+   * 当历史记录模块产生一条新的提交时，`transactionVersion` 会跳变，
+   * 进而触发 `flushPendingTransactions` 尝试把这笔账单发往云端。
+   */
+  function ensureTransactionWatcher() {
+    if (stopTransactionWatch) return
 
-    stopSyncWatch = watch(
+    stopTransactionWatch = watch(
       [
-        () => editorStore.sceneVersion,
-        () => editorStore.activeSchemeId,
-        () =>
-          cloudStore.schemeId
-            ? editorStore.getSchemeById(cloudStore.schemeId)?.name.value || ''
-            : '',
-        () =>
-          cloudStore.schemeId
-            ? editorStore.getSchemeById(cloudStore.schemeId)?.filePath.value || ''
-            : '',
+        () => editorStore.transactionVersion,
+        () => cloudStore.revision,
+        () => cloudStore.status,
+        () => cloudStore.schemeId,
       ],
       () => {
-        if (pendingRemoteSyncSkips.value > 0) {
-          pendingRemoteSyncSkips.value--
-          return
-        }
-        if (isApplyingRemoteUpdate.value) return
-        if (!cloudStore.isConnected) return
-        if (!cloudStore.schemeId || editorStore.activeSchemeId !== cloudStore.schemeId) return
-        debouncedPushSnapshot()
-      }
+        void flushPendingTransactions()
+      },
+      { immediate: true }
     )
   }
 
-  function stopSceneWatcher() {
-    stopSyncWatch?.()
-    stopSyncWatch = null
+  function stopTransactionWatcher() {
+    stopTransactionWatch?.()
+    stopTransactionWatch = null
   }
 
   async function applyRemoteDocument(document: CloudSchemeDocument) {
-    pendingRemoteSyncSkips.value++
     isApplyingRemoteUpdate.value = true
+    inFlightTransactionId.value = null
+
     try {
       let schemeId = cloudStore.schemeId
       if (!schemeId) {
@@ -124,6 +117,7 @@ export function useCloudSchemeSync() {
         }
       }
 
+      editorStore.clearPendingTransactions(schemeId)
       editorStore.setSchemeCloudMeta(schemeId, {
         source: 'cloud',
         cloudRoomCode: document.roomCode,
@@ -136,6 +130,50 @@ export function useCloudSchemeSync() {
     }
   }
 
+  /**
+   * 接收来自其他使用者的远程事务快照更新事件。
+   * 此方法被用来接收从远端直接“空降”过来的 `applyEditorTransactionToScheme` 补丁，并将其应用。
+   */
+  function applyCommittedTransaction(transaction: { schemeId: string; ops: unknown[] }) {
+    const scheme = editorStore.getSchemeById(transaction.schemeId)
+    if (!scheme) return
+
+    isApplyingRemoteUpdate.value = true
+    try {
+      applyEditorTransactionToScheme(scheme, transaction as never)
+      triggerRef(scheme.groupOrigins) // 原点关系的改动单独触发强刷新
+      editorStore.triggerSceneUpdate()
+    } finally {
+      isApplyingRemoteUpdate.value = false
+    }
+  }
+
+  /**
+   * 将当前挂起等待（Pending）发往云端的编辑操作发送给 WebSocket。
+   * 同一台电脑、同一时间绝对不能有第二笔交易正在“飞行中”，必须等到对方应答（Ack）或发生冲突（Conflict/Reset）。
+   */
+  async function flushPendingTransactions() {
+    if (isApplyingRemoteUpdate.value) return
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    if (!cloudStore.isConnected || !cloudStore.schemeId) return
+    if (inFlightTransactionId.value) return
+
+    // 通过队列取出第一条待发送事务
+    const transaction = editorStore.peekPendingTransaction(cloudStore.schemeId)
+    if (!transaction) return
+
+    inFlightTransactionId.value = transaction.id
+    cloudStore.status = 'syncing'
+    socket.send(
+      JSON.stringify({
+        type: 'push_tx',
+        clientId: cloudStore.clientId,
+        baseRevision: cloudStore.revision,
+        transaction,
+      })
+    )
+  }
+
   function handleIncomingMessage(raw: string) {
     const message = JSON.parse(raw) as CloudWsIncomingMessage
 
@@ -143,10 +181,7 @@ export function useCloudSchemeSync() {
       case 'hello':
         cloudStore.revision = message.revision
         cloudStore.status = 'connected'
-        return
-      case 'ack':
-        cloudStore.revision = message.revision
-        cloudStore.status = 'connected'
+        void flushPendingTransactions()
         return
       case 'presence':
         cloudStore.users = message.users
@@ -156,19 +191,37 @@ export function useCloudSchemeSync() {
         notification.error(message.message)
         return
       case 'reset':
+        if (cloudStore.schemeId) {
+          editorStore.clearPendingTransactions(cloudStore.schemeId)
+        }
+        inFlightTransactionId.value = null
         void applyRemoteDocument(message.document)
         cloudStore.status = 'conflict'
         notification.warning(t('cloudScheme.toast.conflict'))
         return
       case 'snapshot':
+        void applyRemoteDocument(message.document)
+        return
+      case 'tx_committed':
+        cloudStore.revision = message.revision
+        cloudStore.status = 'connected'
+        applyCommittedTransaction(message.transaction)
+
         if (message.authorClientId === cloudStore.clientId) {
-          cloudStore.revision = message.document.revision
-          cloudStore.status = 'connected'
-          return
+          editorStore.acknowledgePendingTransaction(message.transaction.id)
+          markTransactionCommitted(message.transaction.schemeId, message.transaction.id)
+          inFlightTransactionId.value = null
         }
 
-        void applyRemoteDocument(message.document)
-        notification.info(t('cloudScheme.toast.remoteUpdated'))
+        if (message.authorClientId !== cloudStore.clientId) {
+          markTransactionsStale(
+            message.transaction.schemeId,
+            collectTransactionTouchedItemIds(message.transaction)
+          )
+          notification.info(t('cloudScheme.toast.remoteUpdated'))
+        }
+
+        void flushPendingTransactions()
         return
     }
   }
@@ -180,10 +233,11 @@ export function useCloudSchemeSync() {
   }) {
     if (socket) {
       socket.close()
+      socket = null
     }
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/cloud-schemes/ws?code=${encodeURIComponent(params.roomCode)}&clientId=${encodeURIComponent(params.clientId)}&displayName=${encodeURIComponent(params.displayName)}`
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${protocol}//${window.location.host}/api/cloud-schemes/ws?code=${encodeURIComponent(params.roomCode)}&clientId=${encodeURIComponent(params.clientId)}&displayName=${encodeURIComponent(params.displayName)}`
 
     await new Promise<void>((resolve, reject) => {
       const nextSocket = new WebSocket(wsUrl)
@@ -204,6 +258,7 @@ export function useCloudSchemeSync() {
       nextSocket.addEventListener('close', () => {
         if (socket === nextSocket) {
           socket = null
+          inFlightTransactionId.value = null
           if (cloudStore.roomCode) {
             cloudStore.status = 'disconnected'
           }
@@ -233,30 +288,12 @@ export function useCloudSchemeSync() {
       clientId,
       revision: params.revision,
     })
-    ensureSceneWatcher()
+    ensureTransactionWatcher()
     await connectSocket({
       roomCode: params.roomCode,
       clientId,
       displayName: params.displayName,
     })
-  }
-
-  function pushCurrentSnapshot() {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return
-    if (!cloudStore.schemeId) return
-
-    const scheme = editorStore.getSchemeById(cloudStore.schemeId)
-    if (!scheme) return
-
-    cloudStore.status = 'syncing'
-    socket.send(
-      JSON.stringify({
-        type: 'push_snapshot',
-        clientId: cloudStore.clientId,
-        baseRevision: cloudStore.revision,
-        snapshot: buildSharedSchemeSnapshot(scheme),
-      })
-    )
   }
 
   async function createRoom(options: { roomCode?: string; displayName: string }) {
@@ -286,14 +323,20 @@ export function useCloudSchemeSync() {
     })
 
     disconnect(false)
-    editorStore.setSchemeCloudMeta(editorStore.activeScheme.id, {
-      source: 'cloud',
-      cloudRoomCode: data.roomCode,
-    })
+    const schemeId = editorStore.normalizeSchemeAsCloudRoom(
+      editorStore.activeScheme.id,
+      data.roomCode,
+      {
+        resetHistory: true,
+      }
+    )
+    if (!schemeId) {
+      throw new Error('Failed to normalize cloud scheme identity')
+    }
 
     await startSession({
       roomCode: data.roomCode,
-      schemeId: editorStore.activeScheme.id,
+      schemeId,
       revision: data.document.revision,
       displayName,
     })
@@ -351,13 +394,60 @@ export function useCloudSchemeSync() {
     return true
   }
 
+  async function reconnectActiveCloudScheme() {
+    const scheme = editorStore.activeScheme
+    if (!scheme || scheme.source.value !== 'cloud') {
+      return false
+    }
+
+    const roomCode = normalizeRoomCode(scheme.cloudRoomCode.value)
+    const displayName = normalizeDisplayName(getStoredDisplayName())
+    if (!roomCode || !displayName) {
+      return false
+    }
+
+    try {
+      const data = await requestJson<CloudSnapshotResponse>('/api/cloud-schemes/join', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ roomCode }),
+      })
+
+      disconnect(false)
+      const schemeId = editorStore.openCloudSchemeSnapshot(data.document.scheme, roomCode)
+      editorStore.setSchemeCloudMeta(schemeId, {
+        source: 'cloud',
+        cloudRoomCode: roomCode,
+      })
+
+      await startSession({
+        roomCode,
+        schemeId,
+        revision: data.document.revision,
+        displayName,
+      })
+
+      return true
+    } catch (error) {
+      console.warn('[CloudScheme] Auto reconnect failed:', error)
+      return false
+    }
+  }
+
   function disconnect(showToast = true) {
     if (socket) {
       socket.close()
       socket = null
     }
 
-    stopSceneWatcher()
+    if (cloudStore.schemeId) {
+      editorStore.clearPendingTransactions(cloudStore.schemeId)
+    }
+
+    inFlightTransactionId.value = null
+    stopTransactionWatcher()
     const hadSession = !!cloudStore.roomCode
     cloudStore.clearSession()
 
@@ -373,6 +463,7 @@ export function useCloudSchemeSync() {
     createRoom,
     joinRoom,
     copyShareCode,
+    reconnectActiveCloudScheme,
     disconnect,
     getStoredDisplayName,
   }

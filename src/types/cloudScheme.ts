@@ -1,4 +1,4 @@
-import type { AppItem } from './editor'
+import type { AppItem, EditorTransaction } from './editor'
 
 export interface SharedSchemeSnapshot {
   name: string
@@ -39,12 +39,13 @@ export interface CloudWsHelloMessage {
 export interface CloudWsSnapshotMessage {
   type: 'snapshot'
   document: CloudSchemeDocument
-  authorClientId?: string
 }
 
-export interface CloudWsAckMessage {
-  type: 'ack'
+export interface CloudWsCommittedTransactionMessage {
+  type: 'tx_committed'
   revision: number
+  authorClientId: string
+  transaction: EditorTransaction
 }
 
 export interface CloudWsResetMessage {
@@ -63,19 +64,19 @@ export interface CloudWsErrorMessage {
   message: string
 }
 
-export interface CloudWsPushSnapshotMessage {
-  type: 'push_snapshot'
+export interface CloudWsPushTransactionMessage {
+  type: 'push_tx'
   clientId: string
   baseRevision: number
-  snapshot: SharedSchemeSnapshot
+  transaction: EditorTransaction
 }
 
 export type CloudWsIncomingMessage =
   | CloudWsHelloMessage
   | CloudWsSnapshotMessage
-  | CloudWsAckMessage
+  | CloudWsCommittedTransactionMessage
   | CloudWsResetMessage
   | CloudWsPresenceMessage
   | CloudWsErrorMessage
 
-export type CloudWsOutgoingMessage = CloudWsPushSnapshotMessage
+export type CloudWsOutgoingMessage = CloudWsPushTransactionMessage

@@ -203,7 +203,24 @@ const currentCloudUserCount = computed(() =>
   cloudSchemeStore.schemeId === editorStore.activeSchemeId ? cloudSchemeStore.activeUserCount : 0
 )
 
+const cloudPendingTransactionCount = computed(() => editorStore.cloudPendingCount)
+const cloudUndoStale = computed(() => editorStore.hasStaleUndo)
+
 const cloudStatusLabel = computed(() => t(`cloudScheme.status.${currentCloudStatus.value}`))
+
+const cloudStatusTooltip = computed(() => {
+  const messages = [t('cloudScheme.statusHint')]
+
+  if (cloudPendingTransactionCount.value > 0) {
+    messages.push(t('cloudScheme.pendingTransactions', { n: cloudPendingTransactionCount.value }))
+  }
+
+  if (cloudUndoStale.value) {
+    messages.push(t('cloudScheme.undoStale'))
+  }
+
+  return messages.join(' · ')
+})
 </script>
 
 <template>
@@ -251,10 +268,22 @@ const cloudStatusLabel = computed(() => t(`cloudScheme.status.${currentCloudStat
               <span>{{ cloudStatusLabel }}</span>
               <span>·</span>
               <span>{{ t('cloudScheme.onlineUsers', { n: currentCloudUserCount }) }}</span>
+              <template v-if="cloudPendingTransactionCount > 0">
+                <span>·</span>
+                <span>{{
+                  t('cloudScheme.pendingTransactionsShort', { n: cloudPendingTransactionCount })
+                }}</span>
+              </template>
+              <template v-if="cloudUndoStale">
+                <span>·</span>
+                <span class="text-amber-600 dark:text-amber-400">{{
+                  t('cloudScheme.undoStaleShort')
+                }}</span>
+              </template>
             </div>
           </TooltipTrigger>
           <TooltipContent>
-            {{ t('cloudScheme.statusHint') }}
+            {{ cloudStatusTooltip }}
           </TooltipContent>
         </Tooltip>
 

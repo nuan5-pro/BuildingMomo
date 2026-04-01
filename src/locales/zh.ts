@@ -295,7 +295,11 @@ export const zhLocale = {
     disconnect: '断开连接',
     onlineUsers: '在线 {n} 人',
     noOnlineUsers: '暂无在线成员',
-    helper: '当前版本同步整个方案内容；共享模式下撤销/重做已禁用。',
+    pendingTransactions: '待同步 {n} 项更改',
+    pendingTransactionsShort: '待同步 {n} 项',
+    undoStale: '最近一次协同操作已被远端后续修改覆盖，当前不可撤销',
+    undoStaleShort: '撤销不可用',
+    helper: '当前版本按事务顺序同步；若其他人修改了同一批物品，最近一次协同撤销可能失效。',
     statusHint: '当前云方案的连接状态',
     status: {
       idle: '未连接',

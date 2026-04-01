@@ -6,7 +6,7 @@ export function useEditorSelection() {
   const store = useEditorStore()
   const { activeScheme, itemsMap, groupsMap } = storeToRefs(store)
 
-  const { saveHistory } = useEditorHistory()
+  const { recordSelectionChange } = useEditorHistory()
 
   // 内部辅助函数：获取物品组ID
   // 为了避免循环依赖（如果 useEditorGroups 也引用了 selection），我们直接从 map 读取
@@ -64,7 +64,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     // 强制单选模式：直接操作单个物品，不扩展到组
     if (options?.skipGroupExpansion) {
@@ -129,7 +129,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史(选择操作,会合并)
-    saveHistory('selection')
+    recordSelectionChange()
 
     if (!additive) {
       activeScheme.value.selectedItemIds.value.clear()
@@ -153,7 +153,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史(选择操作,会合并)
-    saveHistory('selection')
+    recordSelectionChange()
 
     // 强制单选模式：直接移除，不扩展到组
     if (options?.skipGroupExpansion) {
@@ -172,7 +172,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     activeScheme.value.selectedItemIds.value.clear()
 
@@ -184,7 +184,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     activeScheme.value.selectedItemIds.value.clear()
     activeScheme.value.items.value.forEach((item: any) => {
@@ -199,7 +199,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     const newSelection = new Set<string>()
     activeScheme.value.items.value.forEach((item: any) => {
@@ -217,7 +217,7 @@ export function useEditorSelection() {
     if (!activeScheme.value) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     const currentSelection = activeScheme.value.selectedItemIds.value
     const newSelection = new Set<string>()
@@ -255,7 +255,7 @@ export function useEditorSelection() {
     if (currentSelection.size === 0) return
 
     // 保存历史（选择操作，会合并）
-    saveHistory('selection')
+    recordSelectionChange()
 
     // 收集当前选中物品的所有 gameId
     const gameIds = new Set<number>()

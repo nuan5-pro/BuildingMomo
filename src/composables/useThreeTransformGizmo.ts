@@ -12,7 +12,6 @@ import {
   hasScaleRenderCompensation,
   resolveDisplayGeometryInfo,
 } from '@/lib/scaleRenderCompensation'
-import { useEditorHistory } from '@/composables/editor/useEditorHistory'
 import { useEditorManipulation } from '@/composables/editor/useEditorManipulation'
 import type { AppItem } from '@/types/editor'
 import { createGizmoAppearanceManager } from '@/composables/transformGizmo/gizmoAppearance'
@@ -57,7 +56,6 @@ export function useThreeTransformGizmo(
   const uiStore = useUIStore()
   const gameDataStore = useGameDataStore()
   const settingsStore = useSettingsStore()
-  const { saveHistory } = useEditorHistory()
   const { commitBatchedTransform, getSelectedItemsCenter } = useEditorManipulation()
   const { pasteItems, buildClipboardDataFromSelection } = useClipboard()
 
@@ -104,7 +102,6 @@ export function useThreeTransformGizmo(
     applyCollisionSnap: (newWorldMatrices) => snapEngine.applyCollisionSnap(newWorldMatrices),
     onFirstTransform: () => {
       if (!hasStartedTransform.value) {
-        saveHistory('edit')
         hasStartedTransform.value = true
       }
     },
@@ -508,7 +505,6 @@ export function useThreeTransformGizmo(
           }
 
           if (!hasStartedTransform.value) {
-            saveHistory('edit')
             hasStartedTransform.value = true
           }
 
@@ -560,7 +556,6 @@ export function useThreeTransformGizmo(
     newWorldMatrices = snapEngine.applyCollisionSnap(newWorldMatrices)
 
     if (!hasStartedTransform.value) {
-      saveHistory('edit')
       hasStartedTransform.value = true
     }
 
@@ -593,7 +588,7 @@ export function useThreeTransformGizmo(
       }
 
       if (updates.length > 0) {
-        commitBatchedTransform(updates, { saveHistory: false })
+        commitBatchedTransform(updates, { recordHistory: true })
       }
     }
 

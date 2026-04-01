@@ -74,7 +74,7 @@ function convertGameItemToAppItem(gameItem: GameItem): AppItem {
 export function createCodeImportOps(params: CreateCodeImportOpsParams) {
   const { editorStore, notification, t, ensureResourcesReady, preloadActiveSchemeResources } =
     params
-  const { saveHistory } = useEditorHistory()
+  const { recordTransaction } = useEditorHistory()
   const { getAddPositionFn } = useEditorItemAdd()
 
   function getCombinationImportPosition(): [number, number, number] {
@@ -129,60 +129,63 @@ export function createCodeImportOps(params: CreateCodeImportOpsParams) {
     const offsetY = targetPosition[1] - sourceCenterY
     const offsetZ = targetPosition[2] - minZ
 
-    saveHistory('edit')
+    let insertedCount = 0
 
-    let currentMaxInstanceId = scheme.maxInstanceId.value
-    let currentMaxGroupId = scheme.maxGroupId.value
-    const groupIdMap = new Map<number, number>()
-    const newInternalIds: string[] = []
-    const insertedItems: AppItem[] = []
+    recordTransaction('code_import.combination', () => {
+      let currentMaxInstanceId = scheme.maxInstanceId.value
+      let currentMaxGroupId = scheme.maxGroupId.value
+      const groupIdMap = new Map<number, number>()
+      const newInternalIds: string[] = []
+      const insertedItems: AppItem[] = []
 
-    for (const item of sourceItems) {
-      const oldGroupId = item.groupId
-      let newGroupId = 0
+      for (const item of sourceItems) {
+        const oldGroupId = item.groupId
+        let newGroupId = 0
 
-      if (oldGroupId > 0) {
-        if (!groupIdMap.has(oldGroupId)) {
-          currentMaxGroupId++
-          groupIdMap.set(oldGroupId, currentMaxGroupId)
+        if (oldGroupId > 0) {
+          if (!groupIdMap.has(oldGroupId)) {
+            currentMaxGroupId++
+            groupIdMap.set(oldGroupId, currentMaxGroupId)
+          }
+          newGroupId = groupIdMap.get(oldGroupId) ?? 0
         }
-        newGroupId = groupIdMap.get(oldGroupId) ?? 0
+
+        currentMaxInstanceId++
+        const newInternalId = generateUUID()
+        newInternalIds.push(newInternalId)
+
+        insertedItems.push({
+          ...item,
+          internalId: newInternalId,
+          instanceId: currentMaxInstanceId,
+          x: item.x + offsetX,
+          y: item.y + offsetY,
+          z: item.z + offsetZ,
+          groupId: newGroupId,
+          rotation: { ...item.rotation },
+          extra: {
+            ...item.extra,
+            Scale: item.extra.Scale ? { ...item.extra.Scale } : { X: 1, Y: 1, Z: 1 },
+            TempInfo:
+              item.extra.TempInfo && typeof item.extra.TempInfo === 'object'
+                ? { ...item.extra.TempInfo }
+                : {},
+            ColorMap: cloneColorMap(item.extra.ColorMap),
+          },
+        })
       }
 
-      currentMaxInstanceId++
-      const newInternalId = generateUUID()
-      newInternalIds.push(newInternalId)
+      scheme.items.value.push(...insertedItems)
+      scheme.maxInstanceId.value = currentMaxInstanceId
+      scheme.maxGroupId.value = currentMaxGroupId
+      scheme.selectedItemIds.value = new Set(newInternalIds)
 
-      insertedItems.push({
-        ...item,
-        internalId: newInternalId,
-        instanceId: currentMaxInstanceId,
-        x: item.x + offsetX,
-        y: item.y + offsetY,
-        z: item.z + offsetZ,
-        groupId: newGroupId,
-        rotation: { ...item.rotation },
-        extra: {
-          ...item.extra,
-          Scale: item.extra.Scale ? { ...item.extra.Scale } : { X: 1, Y: 1, Z: 1 },
-          TempInfo:
-            item.extra.TempInfo && typeof item.extra.TempInfo === 'object'
-              ? { ...item.extra.TempInfo }
-              : {},
-          ColorMap: cloneColorMap(item.extra.ColorMap),
-        },
-      })
-    }
+      editorStore.triggerSceneUpdate()
+      editorStore.triggerSelectionUpdate()
+      insertedCount = insertedItems.length
+    })
 
-    scheme.items.value.push(...insertedItems)
-    scheme.maxInstanceId.value = currentMaxInstanceId
-    scheme.maxGroupId.value = currentMaxGroupId
-    scheme.selectedItemIds.value = new Set(newInternalIds)
-
-    editorStore.triggerSceneUpdate()
-    editorStore.triggerSelectionUpdate()
-
-    return { success: true, count: insertedItems.length }
+    return { success: true, count: insertedCount }
   }
 
   async function importFromCode(code: string): Promise<void> {

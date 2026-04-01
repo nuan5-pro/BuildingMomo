@@ -299,7 +299,13 @@ export const enLocale = {
     disconnect: 'Disconnect',
     onlineUsers: '{n} online',
     noOnlineUsers: 'No collaborators online',
-    helper: 'This version syncs the full scheme document; undo/redo is disabled while shared.',
+    pendingTransactions: '{n} pending changes',
+    pendingTransactionsShort: '{n} pending',
+    undoStale:
+      'Your latest shared edit was superseded by remote changes and can no longer be undone',
+    undoStaleShort: 'Undo unavailable',
+    helper:
+      'This version syncs transactions in order; if another collaborator changes the same items, the latest shared undo may become unavailable.',
     statusHint: 'Connection status for the current cloud scheme.',
     status: {
       idle: 'Idle',

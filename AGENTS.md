@@ -83,11 +83,12 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
     - `maxInstanceId`, `maxGroupId` – monotonically increasing allocators.
     - View-related state: `currentViewConfig`, `viewState` (camera/zoom preset snapshot).
     - `groupOrigins: ShallowRef<Map<number, string>>` – maps groupId to an origin item ID used for move/rotate operations.
-    - `history` – undo/redo stack (used by `useEditorHistory`).
+    - `history` – undo/redo state tracking (managed by `useEditorHistory`).
 - Derived indices for fast lookup:
   - `itemsMap` (internalId → AppItem) and `groupsMap` (groupId → Set<internalId>). These are used heavily by editor composables and the renderer.
 - Scene/selection versioning:
   - `sceneVersion` and `selectionVersion` are numeric counters incremented by `triggerSceneUpdate` / `triggerSelectionUpdate` so that performance-critical observers (renderer, worker, validation store) can respond without deeply watching arrays/Sets.
+  - `transactionVersion` is incremented whenever a new transaction is recorded, driving cloud synchronization (`useCloudSchemeSync`).
 - Tool state: `currentTool` (`'select' | 'hand'`), `selectionMode` (`'box' | 'lasso'`), `selectionAction` (`'new' | 'add' | 'subtract' | 'intersect' | 'toggle'`), `gizmoMode` (`'translate' | 'rotate' | null`).
 - Global clipboard: `clipboardRef: ShallowRef<ClipboardData>` supports cross-scheme copy/paste with group origin preservation.
 - Closed scheme history: `closedSchemesHistory` (max 10) stores exported `GameDataFile` snapshots, restored via `reopenClosedScheme`.
@@ -228,8 +229,8 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
   - Uses pure functions from `src/lib/alignmentHelpers.ts` for OBB construction, axis projection, and delta calculation.
 - Other editor composables under `src/composables/editor`:
   - `useEditorSelection` – selection behavior (selectAll, clearSelection, invertSelection, selectSameType).
-  - `useEditorGroups` – grouping and ungrouping.
-  - `useEditorHistory` – undo/redo management with `saveHistory('edit' | 'selection')`.
+  - `useEditorGroups` – grouping and ungrouping. MUST output new item references using `map` for immutability.
+  - `useEditorHistory` – orchestrates undo/redo operations via a reference-based transaction engine (`recordTransaction(action, closure)`).
   - `useEditorItemAdd` – item insertion logic (from furniture library).
 - `src/composables/useClipboard.ts` – cross-scheme clipboard with `ClipboardData` that preserves group origins during copy/paste.
 
@@ -244,7 +245,7 @@ The application uses **three distinct coordinate spaces** that must be carefully
   - Right-handed, Z-up coordinate system
   - Y-axis points "downward" in the game world (higher Y = lower altitude)
   - Rotation stored as Euler angles (Roll, Pitch, Yaw) in degrees
-- **Usage**: Persistent storage, undo/redo snapshots, validation logic
+- **Usage**: Persistent storage, validation logic
 
 ##### 2. World Space (Three.js Scene)
 
@@ -427,6 +428,15 @@ The `lib` directory contains reusable mathematical and geometric utilities that 
 - **Key functions**:
   - `calculateBounds(items, getItemSize?)` – Computes axis-aligned bounding box from item positions (optionally considering item sizes)
 - **Note**: For more accurate bounding boxes that consider rotation, use `collision.ts` OBB functions instead
+
+#### `editorTransactions.ts` – Reference-based diffing engine
+
+- **Purpose**: High-performance transaction capture using immutable diffing rather than full snapshots.
+- **Key functions**:
+  - `buildTransactionByRef(scheme, previousOps)` – Performs `===` reference checks to isolate modified items, heavily minimizing clone overhead.
+  - `captureSchemeSnapshot(scheme)` – Zero-copy state capture storing current `.value` arrays.
+  - `applyEditorTransactionToScheme(scheme, transaction)` – Rolls state backward or forward.
+- **Note**: All modifications to scheme data (e.g. `groupId`, `ColorMap` changes) MUST output a new top-level object via spreading (`{...item}`) so `===` checks recognize the mutation. In-place mutation breaks the history stack.
 
 #### Other utilities
 

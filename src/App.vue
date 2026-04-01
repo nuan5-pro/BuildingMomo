@@ -20,6 +20,7 @@ import 'vue-sonner/style.css'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useKeyboardShortcuts } from './composables/useKeyboardShortcuts'
 import { useWorkspaceWorker } from './composables/useWorkspaceWorker'
+import { useCloudSchemeSync } from './composables/useCloudSchemeSync'
 import { useUIStore } from './stores/uiStore'
 
 const editorStore = useEditorStore()
@@ -28,6 +29,7 @@ const settingsStore = useSettingsStore()
 const tabStore = useTabStore()
 const uiStore = useUIStore()
 const { restore: restoreWorkspace, isWorkerActive, startMonitoring } = useWorkspaceWorker()
+const { reconnectActiveCloudScheme } = useCloudSchemeSync()
 
 // 导入 commandStore 用于全局命令状态
 import { useCommandStore } from './stores/commandStore'
@@ -145,6 +147,7 @@ onMounted(async () => {
       // 初始化游戏数据（异步加载）
       gameDataStore.initialize()
       await restoreWorkspace()
+      void reconnectActiveCloudScheme()
     } catch (e) {
       console.error('[App] Restore failed:', e)
     } finally {

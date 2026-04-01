@@ -56,6 +56,8 @@ export function useWorkspaceWorker() {
         name: s.name.value,
         filePath: s.filePath.value,
         lastModified: s.lastModified.value,
+        source: s.source.value,
+        cloudRoomCode: s.cloudRoomCode.value,
       })),
     }
 
@@ -206,7 +208,19 @@ export function useWorkspaceWorker() {
 
     // 2a. 结构性变化 (Tabs, ActiveTab) -> 立即保存 (Worker 端跳过 2s 节流)
     const unwatchStructure = watch(
-      [() => tabStore.tabs, () => tabStore.activeTabId],
+      [
+        () => tabStore.tabs,
+        () => tabStore.activeTabId,
+        () =>
+          editorStore.schemes.map((scheme) => ({
+            id: scheme.id,
+            name: scheme.name.value,
+            filePath: scheme.filePath.value,
+            lastModified: scheme.lastModified.value,
+            source: scheme.source.value,
+            cloudRoomCode: scheme.cloudRoomCode.value,
+          })),
+      ],
       () => {
         debouncedSyncWorkspace(true)
       },

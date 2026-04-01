@@ -322,7 +322,14 @@ const api = {
     meta: {
       tabs: any[]
       activeTabId: string
-      schemes: { id: string; name: string; filePath?: string; lastModified?: number }[]
+      schemes: {
+        id: string
+        name: string
+        filePath?: string
+        lastModified?: number
+        source?: 'local' | 'cloud'
+        cloudRoomCode?: string
+      }[]
     }
     // 当前激活方案的完整数据 (可选)
     activeSchemeData?: {
@@ -350,7 +357,9 @@ const api = {
       if (existing) {
         existing.name = metaScheme.name
         existing.filePath = metaScheme.filePath
-        if (metaScheme.lastModified) existing.lastModified = metaScheme.lastModified
+        existing.lastModified = metaScheme.lastModified
+        existing.source = metaScheme.source
+        existing.cloudRoomCode = metaScheme.cloudRoomCode
         newSchemesList.push(existing)
       } else {
         // 新建空方案

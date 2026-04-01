@@ -5,12 +5,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { useCloudSchemeSync } from '@/composables/useCloudSchemeSync'
 import { useI18n } from '@/composables/useI18n'
+import { useEditorStore } from '@/stores/editorStore'
 
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
 }>()
 
 const { t } = useI18n()
+const editorStore = useEditorStore()
 const { currentCloudScheme, shareCode, copyShareCode, disconnect } = useCloudSchemeSync()
 
 const currentStatusLabel = computed(() => {
@@ -33,9 +35,11 @@ const statusButtonClass = computed(() => {
     return 'bg-destructive/15 text-destructive hover:bg-destructive hover:text-destructive-foreground'
   }
 
-  // connecting / syncing / conflict / idle
   return 'bg-muted text-foreground hover:bg-destructive hover:text-destructive-foreground'
 })
+
+const pendingTransactionCount = computed(() => editorStore.cloudPendingCount)
+const hasStaleUndo = computed(() => editorStore.hasStaleUndo)
 
 async function handleDisconnect() {
   disconnect()
@@ -85,11 +89,18 @@ async function handleDisconnect() {
       </Tooltip>
     </div>
 
-    <div class="px-4 pt-2 text-xs text-muted-foreground">
-      {{ t('cloudScheme.onlineUsers', { n: currentCloudScheme.users.length }) }}
+    <div class="space-y-1 px-4 pt-2">
+      <div class="text-xs text-muted-foreground">
+        {{ t('cloudScheme.onlineUsers', { n: currentCloudScheme.users.length }) }}
+      </div>
+      <div v-if="pendingTransactionCount > 0" class="text-xs text-muted-foreground">
+        {{ t('cloudScheme.pendingTransactions', { n: pendingTransactionCount }) }}
+      </div>
+      <div v-if="hasStaleUndo" class="text-xs text-amber-600 dark:text-amber-400">
+        {{ t('cloudScheme.undoStale') }}
+      </div>
     </div>
 
-    <!-- 在线用户列表 -->
     <ScrollArea class="max-h-56">
       <div class="px-2 pb-1">
         <div

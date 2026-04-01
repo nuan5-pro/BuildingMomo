@@ -164,7 +164,7 @@ type InsertIdMode = 'regenerate' | 'preserve-source'
 interface InternalInsertOptions {
   idMode?: InsertIdMode
   offset?: { x: number; y: number; z: number }
-  saveHistory?: boolean
+  recordHistory?: boolean
   updateSelection?: boolean
   triggerUpdates?: boolean
 }
@@ -173,7 +173,7 @@ export function useClipboard() {
   const store = useEditorStore()
   const uiStore = useUIStore()
   const { activeScheme, clipboardList: clipboard } = storeToRefs(store)
-  const { saveHistory } = useEditorHistory()
+  const { recordTransaction } = useEditorHistory()
 
   function buildClipboardDataFromSelection(): ClipboardData {
     const scheme = activeScheme.value
@@ -222,16 +222,17 @@ export function useClipboard() {
   function cutToClipboard() {
     if (!activeScheme.value) return
 
-    saveHistory('edit')
-    copyToClipboard()
+    recordTransaction('clipboard.cut', () => {
+      copyToClipboard()
 
-    activeScheme.value.items.value = activeScheme.value.items.value.filter(
-      (item) => !activeScheme.value!.selectedItemIds.value.has(item.internalId)
-    )
-    activeScheme.value.selectedItemIds.value.clear()
+      activeScheme.value!.items.value = activeScheme.value!.items.value.filter(
+        (item) => !activeScheme.value!.selectedItemIds.value.has(item.internalId)
+      )
+      activeScheme.value!.selectedItemIds.value.clear()
 
-    store.triggerSceneUpdate()
-    store.triggerSelectionUpdate()
+      store.triggerSceneUpdate()
+      store.triggerSelectionUpdate()
+    })
   }
 
   // 将新插入物品设为选中状态；选择更新触发由调用方统一负责
@@ -256,151 +257,158 @@ export function useClipboard() {
     const {
       idMode = 'regenerate',
       offset = { x: 0, y: 0, z: 0 },
-      saveHistory: shouldSaveHistory = true,
+      recordHistory: shouldRecordHistory = true,
       updateSelection = true,
       triggerUpdates = true,
     } = options
 
-    if (shouldSaveHistory) {
-      saveHistory('edit')
-    }
+    const executeInsert = () => {
+      let currentMaxInstanceId = scheme.maxInstanceId.value
+      let currentMaxGroupId = scheme.maxGroupId.value
 
-    let currentMaxInstanceId = scheme.maxInstanceId.value
-    let currentMaxGroupId = scheme.maxGroupId.value
+      const newIds: string[] = []
+      const newItems: AppItem[] = []
+      const itemIdMap = new Map<string, string>()
+      const targetGroupIdMap = new Map<number, number>()
 
-    const newIds: string[] = []
-    const newItems: AppItem[] = []
-    const itemIdMap = new Map<string, string>()
-    const targetGroupIdMap = new Map<number, number>()
+      if (idMode === 'preserve-source') {
+        const sourceInstanceIds = new Set<number>()
+        const sourceGroupIds = new Set<number>()
 
-    if (idMode === 'preserve-source') {
-      const sourceInstanceIds = new Set<number>()
-      const sourceGroupIds = new Set<number>()
-
-      for (const item of clipboardData.items) {
-        sourceInstanceIds.add(item.instanceId)
-        if (item.groupId > 0) {
-          sourceGroupIds.add(item.groupId)
-        }
-      }
-
-      const existingInstanceRemap = new Map<number, number>()
-      const existingGroupRemap = new Map<number, number>()
-      const existingGroupOrigins = new Map(scheme.groupOrigins.value)
-
-      for (const item of scheme.items.value) {
-        if (sourceInstanceIds.has(item.instanceId) && !existingInstanceRemap.has(item.instanceId)) {
-          currentMaxInstanceId++
-          existingInstanceRemap.set(item.instanceId, currentMaxInstanceId)
-        }
-        if (
-          item.groupId > 0 &&
-          sourceGroupIds.has(item.groupId) &&
-          !existingGroupRemap.has(item.groupId)
-        ) {
-          currentMaxGroupId++
-          existingGroupRemap.set(item.groupId, currentMaxGroupId)
-        }
-      }
-
-      if (existingInstanceRemap.size > 0 || existingGroupRemap.size > 0) {
-        for (const item of scheme.items.value) {
-          const remappedInstanceId = existingInstanceRemap.get(item.instanceId)
-          const remappedGroupId =
-            item.groupId > 0 ? existingGroupRemap.get(item.groupId) : undefined
-          const shouldRemapColorMap = existingGroupRemap.size > 0
-
-          if (remappedInstanceId !== undefined) {
-            item.instanceId = remappedInstanceId
+        for (const item of clipboardData.items) {
+          sourceInstanceIds.add(item.instanceId)
+          if (item.groupId > 0) {
+            sourceGroupIds.add(item.groupId)
           }
+        }
 
-          if (shouldRemapColorMap) {
-            item.extra = {
-              ...cloneItemExtra(item.extra),
-              ColorMap: remapColorMapGroupIds(item.extra.ColorMap, existingGroupRemap),
+        const existingInstanceRemap = new Map<number, number>()
+        const existingGroupRemap = new Map<number, number>()
+        const existingGroupOrigins = new Map(scheme.groupOrigins.value)
+
+        for (const item of scheme.items.value) {
+          if (
+            sourceInstanceIds.has(item.instanceId) &&
+            !existingInstanceRemap.has(item.instanceId)
+          ) {
+            currentMaxInstanceId++
+            existingInstanceRemap.set(item.instanceId, currentMaxInstanceId)
+          }
+          if (
+            item.groupId > 0 &&
+            sourceGroupIds.has(item.groupId) &&
+            !existingGroupRemap.has(item.groupId)
+          ) {
+            currentMaxGroupId++
+            existingGroupRemap.set(item.groupId, currentMaxGroupId)
+          }
+        }
+
+        if (existingInstanceRemap.size > 0 || existingGroupRemap.size > 0) {
+          for (const item of scheme.items.value) {
+            const remappedInstanceId = existingInstanceRemap.get(item.instanceId)
+            const remappedGroupId =
+              item.groupId > 0 ? existingGroupRemap.get(item.groupId) : undefined
+            const shouldRemapColorMap = existingGroupRemap.size > 0
+
+            if (remappedInstanceId !== undefined) {
+              item.instanceId = remappedInstanceId
+            }
+
+            if (shouldRemapColorMap) {
+              item.extra = {
+                ...cloneItemExtra(item.extra),
+                ColorMap: remapColorMapGroupIds(item.extra.ColorMap, existingGroupRemap),
+              }
+            }
+
+            if (remappedGroupId !== undefined) {
+              item.groupId = remappedGroupId
             }
           }
 
-          if (remappedGroupId !== undefined) {
-            item.groupId = remappedGroupId
+          for (const [oldGroupId, newGroupId] of existingGroupRemap.entries()) {
+            const originItemId = existingGroupOrigins.get(oldGroupId)
+            existingGroupOrigins.delete(oldGroupId)
+            if (originItemId) {
+              existingGroupOrigins.set(newGroupId, originItemId)
+            }
           }
+
+          scheme.groupOrigins.value = existingGroupOrigins
         }
 
-        for (const [oldGroupId, newGroupId] of existingGroupRemap.entries()) {
-          const originItemId = existingGroupOrigins.get(oldGroupId)
-          existingGroupOrigins.delete(oldGroupId)
-          if (originItemId) {
-            existingGroupOrigins.set(newGroupId, originItemId)
-          }
-        }
-
-        scheme.groupOrigins.value = existingGroupOrigins
-      }
-
-      sourceGroupIds.forEach((groupId) => targetGroupIdMap.set(groupId, groupId))
-    } else {
-      for (const item of clipboardData.items) {
-        if (item.groupId > 0 && !targetGroupIdMap.has(item.groupId)) {
-          currentMaxGroupId++
-          targetGroupIdMap.set(item.groupId, currentMaxGroupId)
-        }
-      }
-    }
-
-    for (const item of clipboardData.items) {
-      const newInternalId = generateUUID()
-      itemIdMap.set(item.internalId, newInternalId)
-      newIds.push(newInternalId)
-
-      let nextInstanceId = item.instanceId
-      if (idMode === 'regenerate') {
-        currentMaxInstanceId++
-        nextInstanceId = currentMaxInstanceId
+        sourceGroupIds.forEach((groupId) => targetGroupIdMap.set(groupId, groupId))
       } else {
-        currentMaxInstanceId = Math.max(currentMaxInstanceId, nextInstanceId)
+        for (const item of clipboardData.items) {
+          if (item.groupId > 0 && !targetGroupIdMap.has(item.groupId)) {
+            currentMaxGroupId++
+            targetGroupIdMap.set(item.groupId, currentMaxGroupId)
+          }
+        }
       }
 
-      const nextGroupId = item.groupId > 0 ? (targetGroupIdMap.get(item.groupId) ?? 0) : 0
-      currentMaxGroupId = Math.max(currentMaxGroupId, nextGroupId)
+      for (const item of clipboardData.items) {
+        const newInternalId = generateUUID()
+        itemIdMap.set(item.internalId, newInternalId)
+        newIds.push(newInternalId)
 
-      newItems.push({
-        ...cloneItem(item),
-        internalId: newInternalId,
-        instanceId: nextInstanceId,
-        x: item.x + offset.x,
-        y: item.y + offset.y,
-        z: item.z + offset.z,
-        groupId: nextGroupId,
+        let nextInstanceId = item.instanceId
+        if (idMode === 'regenerate') {
+          currentMaxInstanceId++
+          nextInstanceId = currentMaxInstanceId
+        } else {
+          currentMaxInstanceId = Math.max(currentMaxInstanceId, nextInstanceId)
+        }
+
+        const nextGroupId = item.groupId > 0 ? (targetGroupIdMap.get(item.groupId) ?? 0) : 0
+        currentMaxGroupId = Math.max(currentMaxGroupId, nextGroupId)
+
+        newItems.push({
+          ...cloneItem(item),
+          internalId: newInternalId,
+          instanceId: nextInstanceId,
+          x: item.x + offset.x,
+          y: item.y + offset.y,
+          z: item.z + offset.z,
+          groupId: nextGroupId,
+        })
+      }
+
+      const nextGroupOrigins = new Map(scheme.groupOrigins.value)
+      clipboardData.groupOrigins.forEach((oldOriginItemId, oldGroupId) => {
+        const newOriginItemId = itemIdMap.get(oldOriginItemId)
+        const newGroupId = targetGroupIdMap.get(oldGroupId)
+        if (newOriginItemId && newGroupId !== undefined) {
+          nextGroupOrigins.set(newGroupId, newOriginItemId)
+        }
       })
-    }
 
-    const nextGroupOrigins = new Map(scheme.groupOrigins.value)
-    clipboardData.groupOrigins.forEach((oldOriginItemId, oldGroupId) => {
-      const newOriginItemId = itemIdMap.get(oldOriginItemId)
-      const newGroupId = targetGroupIdMap.get(oldGroupId)
-      if (newOriginItemId && newGroupId !== undefined) {
-        nextGroupOrigins.set(newGroupId, newOriginItemId)
-      }
-    })
+      scheme.groupOrigins.value = nextGroupOrigins
+      scheme.items.value.push(...newItems)
+      scheme.maxInstanceId.value = currentMaxInstanceId
+      scheme.maxGroupId.value = currentMaxGroupId
 
-    scheme.groupOrigins.value = nextGroupOrigins
-    scheme.items.value.push(...newItems)
-    scheme.maxInstanceId.value = currentMaxInstanceId
-    scheme.maxGroupId.value = currentMaxGroupId
-
-    if (updateSelection) {
-      selectInsertedItems(newIds)
-    }
-
-    if (triggerUpdates) {
-      triggerRef(scheme.groupOrigins)
-      store.triggerSceneUpdate()
       if (updateSelection) {
-        store.triggerSelectionUpdate()
+        selectInsertedItems(newIds)
       }
+
+      if (triggerUpdates) {
+        triggerRef(scheme.groupOrigins)
+        store.triggerSceneUpdate()
+        if (updateSelection) {
+          store.triggerSelectionUpdate()
+        }
+      }
+
+      return { newIds, newItems }
     }
 
-    return { newIds, newItems }
+    if (!shouldRecordHistory) {
+      return executeInsert()
+    }
+
+    return recordTransaction(`clipboard.insert.${idMode}`, executeInsert)
   }
 
   // 对剪贴板数据应用一次步进变换，返回变换后的新剪贴板快照（累计调用实现步进复制）
@@ -487,32 +495,32 @@ export function useClipboard() {
       return []
     }
 
-    saveHistory('edit')
+    return recordTransaction('clipboard.step_repeat', () => {
+      const { stepRepeat } = options
+      const createdIds: string[] = []
+      const pivot = getClipboardPivot(clipboard.value)
+      let currentClipboardData = cloneClipboardData(clipboard.value)
 
-    const { stepRepeat } = options
-    const createdIds: string[] = []
-    const pivot = getClipboardPivot(clipboard.value)
-    let currentClipboardData = cloneClipboardData(clipboard.value)
+      for (let index = 0; index < stepRepeat.repeatCount; index++) {
+        currentClipboardData = transformClipboardDataStep(currentClipboardData, stepRepeat, pivot)
+        const result = insertClipboardData(currentClipboardData, {
+          idMode: 'regenerate',
+          recordHistory: false,
+          updateSelection: false,
+          triggerUpdates: false,
+        })
+        createdIds.push(...result.newIds)
+      }
 
-    for (let index = 0; index < stepRepeat.repeatCount; index++) {
-      currentClipboardData = transformClipboardDataStep(currentClipboardData, stepRepeat, pivot)
-      const result = insertClipboardData(currentClipboardData, {
-        idMode: 'regenerate',
-        saveHistory: false,
-        updateSelection: false,
-        triggerUpdates: false,
-      })
-      createdIds.push(...result.newIds)
-    }
+      if (createdIds.length > 0) {
+        selectInsertedItems(createdIds)
+        triggerRef(activeScheme.value!.groupOrigins)
+        store.triggerSceneUpdate()
+        store.triggerSelectionUpdate()
+      }
 
-    if (createdIds.length > 0) {
-      selectInsertedItems(createdIds)
-      triggerRef(activeScheme.value.groupOrigins)
-      store.triggerSceneUpdate()
-      store.triggerSelectionUpdate()
-    }
-
-    return createdIds
+      return createdIds
+    })
   }
 
   function clearClipboard() {

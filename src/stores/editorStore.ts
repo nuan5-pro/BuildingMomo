@@ -6,6 +6,7 @@ export type SelectionAction = 'new' | 'add' | 'subtract' | 'intersect' | 'toggle
 
 import type {
   AppItem,
+  EditorTransaction,
   GameItem,
   GameDataFile,
   HomeScheme,
@@ -19,18 +20,11 @@ import { useI18n } from '../composables/useI18n'
 
 // 生成简单的UUID
 function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-    const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
-    return v.toString(16)
-  })
+  return crypto.randomUUID()
 }
 
 function cloneItems(items: AppItem[]): AppItem[] {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(items)
-  }
-  return JSON.parse(JSON.stringify(items)) as AppItem[]
+  return structuredClone(items)
 }
 
 function getSnapshotMaxValues(items: AppItem[]) {
@@ -109,6 +103,14 @@ export const useEditorStore = defineStore('editor', () => {
     return schemes.value.find((scheme) => scheme.id === schemeId) ?? null
   }
 
+  function getCloudSchemeByRoomCode(roomCode: string) {
+    return (
+      schemes.value.find(
+        (scheme) => scheme.source.value === 'cloud' && scheme.cloudRoomCode.value === roomCode
+      ) ?? null
+    )
+  }
+
   // 性能优化：建立 itemId -> item 的索引映射
   // 由于 items 是 computed，当 items.value 触发更新时，此映射也会重建
   const itemsMap = computed(() => {
@@ -147,6 +149,8 @@ export const useEditorStore = defineStore('editor', () => {
   const selectionVersion = ref(0)
   // 历史栈版本号：undo/redo 会原地修改 history.value，用此版本号驱动撤销/重做按钮的 enabled 更新
   const historyVersion = ref(0)
+  const transactionVersion = ref(0)
+  const pendingTransactions = shallowRef<EditorTransaction[]>([])
 
   // 手动触发更新的方法
   function triggerSceneUpdate() {
@@ -166,6 +170,47 @@ export const useEditorStore = defineStore('editor', () => {
   function triggerHistoryUpdate() {
     if (activeScheme.value) {
       historyVersion.value++
+    }
+  }
+
+  function enqueuePendingTransaction(transaction: EditorTransaction) {
+    pendingTransactions.value = [...pendingTransactions.value, transaction]
+    transactionVersion.value++
+  }
+
+  function peekPendingTransaction(schemeId: string) {
+    return (
+      pendingTransactions.value.find((transaction) => transaction.schemeId === schemeId) ?? null
+    )
+  }
+
+  function acknowledgePendingTransaction(transactionId: string) {
+    const nextTransactions = pendingTransactions.value.filter(
+      (transaction) => transaction.id !== transactionId
+    )
+
+    if (nextTransactions.length !== pendingTransactions.value.length) {
+      pendingTransactions.value = nextTransactions
+      transactionVersion.value++
+    }
+  }
+
+  function clearPendingTransactions(schemeId?: string) {
+    if (!schemeId) {
+      if (pendingTransactions.value.length > 0) {
+        pendingTransactions.value = []
+        transactionVersion.value++
+      }
+      return
+    }
+
+    const nextTransactions = pendingTransactions.value.filter(
+      (transaction) => transaction.schemeId !== schemeId
+    )
+
+    if (nextTransactions.length !== pendingTransactions.value.length) {
+      pendingTransactions.value = nextTransactions
+      transactionVersion.value++
     }
   }
 
@@ -323,6 +368,94 @@ export const useEditorStore = defineStore('editor', () => {
     return newScheme.id
   }
 
+  function normalizeSchemeAsCloudRoom(
+    schemeId: string,
+    roomCode: string,
+    options?: { resetHistory?: boolean }
+  ) {
+    const targetSchemeId = `cloud:${roomCode}`
+    const scheme = getSchemeById(schemeId)
+    if (!scheme) return null
+
+    if (options?.resetHistory) {
+      scheme.history.value = undefined
+      triggerHistoryUpdate()
+    }
+
+    scheme.source.value = 'cloud'
+    scheme.cloudRoomCode.value = roomCode
+
+    if (scheme.id === targetSchemeId) {
+      tabStore.replaceSchemeTabId(scheme.id, targetSchemeId, scheme.name.value)
+      return targetSchemeId
+    }
+
+    const existingTargetScheme = getSchemeById(targetSchemeId)
+    if (existingTargetScheme) {
+      schemes.value = schemes.value.filter((current) => current.id !== schemeId)
+      clearPendingTransactions(schemeId)
+
+      if (clipboardRef.value.sourceSchemeId === schemeId) {
+        clipboardRef.value = {
+          ...clipboardRef.value,
+          sourceSchemeId: targetSchemeId,
+        }
+      }
+
+      tabStore.replaceSchemeTabId(schemeId, targetSchemeId, existingTargetScheme.name.value)
+      return targetSchemeId
+    }
+
+    const normalizedScheme: HomeScheme = {
+      id: targetSchemeId,
+      name: scheme.name,
+      filePath: scheme.filePath,
+      lastModified: scheme.lastModified,
+      source: scheme.source,
+      cloudRoomCode: scheme.cloudRoomCode,
+      items: scheme.items,
+      selectedItemIds: scheme.selectedItemIds,
+      maxInstanceId: scheme.maxInstanceId,
+      maxGroupId: scheme.maxGroupId,
+      currentViewConfig: scheme.currentViewConfig,
+      viewState: scheme.viewState,
+      groupOrigins: scheme.groupOrigins,
+      history: scheme.history,
+    }
+
+    schemes.value = schemes.value.map((current) =>
+      current.id === schemeId ? normalizedScheme : current
+    )
+
+    let transactionsChanged = false
+    const nextTransactions = pendingTransactions.value.map((transaction) => {
+      if (transaction.schemeId !== schemeId) {
+        return transaction
+      }
+
+      transactionsChanged = true
+      return {
+        ...transaction,
+        schemeId: targetSchemeId,
+      }
+    })
+
+    if (transactionsChanged) {
+      pendingTransactions.value = nextTransactions
+      transactionVersion.value++
+    }
+
+    if (clipboardRef.value.sourceSchemeId === schemeId) {
+      clipboardRef.value = {
+        ...clipboardRef.value,
+        sourceSchemeId: targetSchemeId,
+      }
+    }
+
+    tabStore.replaceSchemeTabId(schemeId, targetSchemeId, scheme.name.value)
+    return targetSchemeId
+  }
+
   function openCloudSchemeSnapshot(snapshot: SharedSchemeSnapshot, roomCode: string): string {
     const schemeId = `cloud:${roomCode}`
     const existing = getSchemeById(schemeId)
@@ -331,6 +464,19 @@ export const useEditorStore = defineStore('editor', () => {
       replaceSchemeSnapshot(schemeId, snapshot, { preserveViewState: true })
       tabStore.openSchemeTab(existing.id, existing.name.value)
       return existing.id
+    }
+
+    const legacyScheme = getCloudSchemeByRoomCode(roomCode)
+    if (legacyScheme) {
+      const normalizedSchemeId = normalizeSchemeAsCloudRoom(legacyScheme.id, roomCode)
+      if (normalizedSchemeId) {
+        replaceSchemeSnapshot(normalizedSchemeId, snapshot, { preserveViewState: true })
+        const normalizedScheme = getSchemeById(normalizedSchemeId)
+        if (normalizedScheme) {
+          tabStore.openSchemeTab(normalizedScheme.id, normalizedScheme.name.value)
+          return normalizedScheme.id
+        }
+      }
     }
 
     const newScheme = buildSchemeFromSharedSnapshot(snapshot, schemeId)
@@ -397,6 +543,8 @@ export const useEditorStore = defineStore('editor', () => {
   function closeScheme(schemeId: string) {
     const scheme = schemes.value.find((s) => s.id === schemeId)
     if (!scheme) return
+
+    clearPendingTransactions(schemeId)
 
     // 📌 新增：导出方案数据并保存到历史
     try {
@@ -483,6 +631,7 @@ export const useEditorStore = defineStore('editor', () => {
       items: [],
       groupOrigins: new Map(),
     }
+    clearPendingTransactions()
   }
 
   // 重新打开已关闭的方案
@@ -604,6 +753,25 @@ export const useEditorStore = defineStore('editor', () => {
     return groupId
   }
 
+  // ========== 云协同状态 getters（供 UI 组件复用） ==========
+
+  const cloudPendingCount = computed(() => {
+    transactionVersion.value // 显式依赖注册
+    const schemeId = activeSchemeId.value
+    if (!schemeId) return 0
+    return pendingTransactions.value.filter((t) => t.schemeId === schemeId).length
+  })
+
+  const hasStaleUndo = computed(() => {
+    historyVersion.value // 显式依赖注册
+    const scheme = activeScheme.value
+    if (!scheme || scheme.source.value !== 'cloud') return false
+    const stack = scheme.history.value?.transactionUndoStack
+    if (!stack?.length) return false
+    const top = stack[stack.length - 1]
+    return !!top && top.stale
+  })
+
   return {
     // 多方案状态
     schemes,
@@ -627,6 +795,8 @@ export const useEditorStore = defineStore('editor', () => {
     setSchemeCloudMeta,
     closeScheme,
     getSchemeById,
+    getCloudSchemeByRoomCode,
+    normalizeSchemeAsCloudRoom,
     renameScheme,
     updateSchemeInfo,
     saveCurrentViewConfig,
@@ -641,10 +811,20 @@ export const useEditorStore = defineStore('editor', () => {
     sceneVersion,
     selectionVersion,
     historyVersion,
+    transactionVersion,
+    pendingTransactions,
     triggerSceneUpdate,
     triggerSelectionUpdate,
     triggerHistoryUpdate,
+    enqueuePendingTransaction,
+    peekPendingTransaction,
+    acknowledgePendingTransaction,
+    clearPendingTransactions,
     setItemInstanceId,
+
+    // 云协同状态
+    cloudPendingCount,
+    hasStaleUndo,
 
     // 组合工具函数
     getGroupIdIfEntireGroupSelected,

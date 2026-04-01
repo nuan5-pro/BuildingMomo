@@ -28,7 +28,7 @@ interface GroupSelectionState {
 
 const editorStore = useEditorStore()
 const gameDataStore = useGameDataStore()
-const { saveHistory } = useEditorHistory()
+const { recordTransaction } = useEditorHistory()
 const { t } = useI18n()
 
 // 控制显示
@@ -225,46 +225,47 @@ function applyGroupColor(groupId: number, colorIndex: number | null) {
   if (selectedIds.size === 0) return
 
   const groupKey = String(groupId)
-  let changed = false
 
-  const newItems = scheme.items.value.map((item) => {
-    if (!selectedIds.has(item.internalId)) return item
+  recordTransaction(colorIndex === null ? 'dye.disable' : 'dye.apply', () => {
+    let changed = false
 
-    const editableColorMap = toEditableColorMapObject(item.extra.ColorMap)
-    if (colorIndex === null) {
-      // 关闭该组染色
-      if (isSimpleMode.value && groupId === 0) {
-        // 简单模式：group 0 置为 0
-        editableColorMap[groupKey] = 0
-      } else {
-        // 多组模式：删除该组条目
-        delete editableColorMap[groupKey]
-      }
-    } else {
-      // 开启/切换该组染色
-      if (isSimpleMode.value && groupId === 0) {
+    const newItems = scheme.items.value.map((item) => {
+      if (!selectedIds.has(item.internalId)) return item
+
+      const editableColorMap = toEditableColorMapObject(item.extra.ColorMap)
+      if (colorIndex === null) {
+        // 关闭该组染色
+        if (isSimpleMode.value && groupId === 0) {
+          // 简单模式：group 0 置为 0
+          editableColorMap[groupKey] = 0
+        } else {
+          // 多组模式：删除该组条目
+          delete editableColorMap[groupKey]
+        }
+      } else if (isSimpleMode.value && groupId === 0) {
+        // 开启/切换该组染色
         // 简单模式：直接写颜色编号
         editableColorMap[groupKey] = colorIndex
       } else {
+        // 开启/切换该组染色
         // 多组模式：按「组编号 * 10 + 颜色编号」编码
         editableColorMap[groupKey] = groupId * 10 + colorIndex
       }
-    }
 
-    const nextColorMap = finalizeColorMapObject(editableColorMap)
-    if (areColorMapsEqual(item.extra.ColorMap, nextColorMap)) {
-      return item
-    }
+      const nextColorMap = finalizeColorMapObject(editableColorMap)
+      if (areColorMapsEqual(item.extra.ColorMap, nextColorMap)) {
+        return item
+      }
 
-    changed = true
-    return withNextColorMap(item, nextColorMap)
+      changed = true
+      return withNextColorMap(item, nextColorMap)
+    })
+
+    if (!changed) return
+
+    scheme.items.value = newItems
+    editorStore.triggerSceneUpdate()
   })
-
-  if (!changed) return
-
-  saveHistory('edit')
-  scheme.items.value = newItems
-  editorStore.triggerSceneUpdate()
 }
 
 function resetAllSelectedColors() {
@@ -274,59 +275,60 @@ function resetAllSelectedColors() {
   const selectedIds = scheme.selectedItemIds.value
   if (selectedIds.size === 0) return
 
-  let changed = false
+  recordTransaction('dye.reset', () => {
+    let changed = false
 
-  const newItems = scheme.items.value.map((item) => {
-    if (!selectedIds.has(item.internalId)) {
-      return item
-    }
-
-    // 根据每个物体自己的模型配置，决定是简单模式还是多组模式
-    const modelConfig = gameDataStore.getFurnitureModelConfig(item.gameId)
-    const colors = modelConfig?.colors
-    if (!colors) {
-      // 不支持染色的物体保持不变
-      return item
-    }
-
-    const colorKeys = Object.keys(colors)
-    const itemIsSimpleMode = colorKeys.length === 1 && colorKeys[0] === '0'
-
-    const targetColorMap: Record<string, number> = itemIsSimpleMode ? { '0': 0 } : {}
-
-    // 避免无意义写入：如果已经是目标状态则跳过
-    const current = item.extra.ColorMap
-    let isSame = false
-    if (current && !Array.isArray(current)) {
-      const currentKeys = Object.keys(current)
-      const targetKeys = Object.keys(targetColorMap)
-      if (
-        currentKeys.length === targetKeys.length &&
-        currentKeys.every((key) => current[key] === targetColorMap[key])
-      ) {
-        isSame = true
+    const newItems = scheme.items.value.map((item) => {
+      if (!selectedIds.has(item.internalId)) {
+        return item
       }
-    }
 
-    if (isSame) {
-      return item
-    }
+      // 根据每个物体自己的模型配置，决定是简单模式还是多组模式
+      const modelConfig = gameDataStore.getFurnitureModelConfig(item.gameId)
+      const colors = modelConfig?.colors
+      if (!colors) {
+        // 不支持染色的物体保持不变
+        return item
+      }
 
-    changed = true
-    return {
-      ...item,
-      extra: {
-        ...item.extra,
-        ColorMap: targetColorMap,
-      },
-    }
+      const colorKeys = Object.keys(colors)
+      const itemIsSimpleMode = colorKeys.length === 1 && colorKeys[0] === '0'
+
+      const targetColorMap: Record<string, number> = itemIsSimpleMode ? { '0': 0 } : {}
+
+      // 避免无意义写入：如果已经是目标状态则跳过
+      const current = item.extra.ColorMap
+      let isSame = false
+      if (current && !Array.isArray(current)) {
+        const currentKeys = Object.keys(current)
+        const targetKeys = Object.keys(targetColorMap)
+        if (
+          currentKeys.length === targetKeys.length &&
+          currentKeys.every((key) => current[key] === targetColorMap[key])
+        ) {
+          isSame = true
+        }
+      }
+
+      if (isSame) {
+        return item
+      }
+
+      changed = true
+      return {
+        ...item,
+        extra: {
+          ...item.extra,
+          ColorMap: targetColorMap,
+        },
+      }
+    })
+
+    if (!changed) return
+
+    scheme.items.value = newItems
+    editorStore.triggerSceneUpdate()
   })
-
-  if (!changed) return
-
-  saveHistory('edit')
-  scheme.items.value = newItems
-  editorStore.triggerSceneUpdate()
 }
 
 function close() {

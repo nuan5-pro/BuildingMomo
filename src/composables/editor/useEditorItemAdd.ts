@@ -26,7 +26,7 @@ const getAddPositionFn = ref<(() => [number, number, number] | null) | null>(nul
 export function useEditorItemAdd() {
   const editorStore = useEditorStore()
   const { activeScheme } = storeToRefs(editorStore)
-  const { saveHistory } = useEditorHistory()
+  const { recordTransaction } = useEditorHistory()
 
   /**
    * 添加家具物品到当前方案
@@ -83,18 +83,13 @@ export function useEditorItemAdd() {
       },
     }
 
-    // 4. 保存历史记录（用于撤销）
-    saveHistory('edit')
-
-    // 5. 添加到场景（创建新数组以触发响应式更新）
-    scheme.items.value = [...scheme.items.value, newItem]
-
-    // 6. 触发场景更新
-    editorStore.triggerSceneUpdate()
-
-    // 7. 自动选中新物品
-    scheme.selectedItemIds.value = new Set([newItem.internalId])
-    editorStore.triggerSelectionUpdate()
+    recordTransaction('item.add', () => {
+      // 4. 添加到场景（创建新数组以触发推断引擎）
+      scheme.items.value = [...scheme.items.value, newItem]
+      editorStore.triggerSceneUpdate()
+      scheme.selectedItemIds.value = new Set([newItem.internalId])
+      editorStore.triggerSelectionUpdate()
+    })
 
     console.log('[EditorItemAdd] Added item:', {
       gameId: itemId,

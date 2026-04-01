@@ -175,33 +175,99 @@ export interface WorkingCoordinateSystem {
   }
 }
 
-// 历史记录快照
-export interface HistorySnapshot {
-  // 注意：items 保存的是对象引用的浅拷贝或深拷贝，取决于具体实现
-  items: AppItem[] | null
-  selectedItemIds: Set<string> // 选择状态快照
-  timestamp: number // 时间戳
-  type: 'edit' | 'selection' // 操作类型
+export interface SchemeMetaState {
+  name: string
+  filePath?: string
+  lastModified?: number
 }
 
-// 历史记录栈
+export interface PatchItemChange {
+  itemId: string
+  before: AppItem
+  after: AppItem
+}
+
+export interface PatchItemsOperation {
+  type: 'patch_items'
+  changes: PatchItemChange[]
+}
+
+export interface AddItemsOperation {
+  type: 'add_items'
+  items: AppItem[]
+}
+
+export interface RemoveItemsOperation {
+  type: 'remove_items'
+  items: AppItem[]
+}
+
+export interface SetGroupOriginsOperation {
+  type: 'set_group_origins'
+  before: Array<[number, string]>
+  after: Array<[number, string]>
+}
+
+export interface SetSchemeMetaOperation {
+  type: 'set_scheme_meta'
+  before: SchemeMetaState
+  after: SchemeMetaState
+}
+
+export type EditorOperation =
+  | PatchItemsOperation
+  | AddItemsOperation
+  | RemoveItemsOperation
+  | SetGroupOriginsOperation
+  | SetSchemeMetaOperation
+
+export interface EditorTransaction {
+  id: string
+  schemeId: string
+  createdAt: number
+  intent: string
+  ops: EditorOperation[]
+}
+
+export interface SelectionHistoryEntry {
+  kind: 'selection'
+  selectedItemIds: Set<string>
+  sequence: number
+  timestamp: number
+}
+
+export interface TransactionHistoryEntry {
+  kind: 'transaction'
+  transaction: EditorTransaction
+  selectionBefore: Set<string>
+  selectionAfter: Set<string>
+  committed: boolean
+  stale: boolean
+  sequence: number
+  timestamp: number
+}
+
+// Undo/redo history stacks
 export interface HistoryStack {
-  undoStack: HistorySnapshot[]
-  redoStack: HistorySnapshot[]
-  maxSize: number // 最大历史记录数量
+  selectionUndoStack: SelectionHistoryEntry[]
+  selectionRedoStack: SelectionHistoryEntry[]
+  transactionUndoStack: TransactionHistoryEntry[]
+  transactionRedoStack: TransactionHistoryEntry[]
+  maxSize: number // Max entries per stack
+  nextSequence: number
 }
 
-// 关闭的方案历史记录
+// Recently closed scheme snapshot
 export interface ClosedSchemeHistory {
-  id: string // 原方案 ID（用于去重和标识）
-  name: string // 方案名称
-  fileName?: string // 原始文件名（如果有）
-  gameData: GameDataFile // 导出的游戏 JSON 数据
-  lastModified?: number // 最后修改时间
-  closedAt: number // 关闭时间戳
+  id: string // Original scheme ID
+  name: string // Scheme name
+  fileName?: string // Original file name if available
+  gameData: GameDataFile // Exported game JSON payload
+  lastModified?: number // Last modified timestamp
+  closedAt: number // Close timestamp
 }
 
-// 剪贴板数据（支持跨方案复制粘贴）
+// Clipboard data for cross-scheme copy/paste
 export interface ClipboardData {
   sourceSchemeId?: string | null // 剪贴板来源方案 ID，用于判断高级粘贴模式可用性
   items: AppItem[] // 复制的物品列表

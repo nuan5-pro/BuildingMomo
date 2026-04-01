@@ -1,0 +1,350 @@
+import type {
+  AppItem,
+  EditorOperation,
+  EditorTransaction,
+  HomeScheme,
+  PatchItemChange,
+  SchemeMetaState,
+} from '@/types/editor'
+
+// ========== 零拷贝快照：只存引用 ==========
+
+/**
+ * 操作前/后的方案状态快照。
+ * 核心优化点：不做任何深拷贝，只保存数组 / Map 的真实引用指针。
+ *
+ * 使用前提：业务侧（如 useEditorManipulation 等处）在修改家具信息时，
+ * 绝不会也不能去“原地覆盖（如 item.x = 100）”，而必须“产出该家具的新对象实体（使用 Map 遍历或者展开语法 {...item}）”
+ * 这样做的结果是：但凡 `beforeItems[i] === afterItems[i]` (它们由于是同一个对象内存地址)，
+ * 系统就可以 100% 确定这个家具连一根毫毛都没有改过，进而完全跳过漫长的查找对比！
+ */
+export interface SchemeTransactionSnapshot {
+  meta: SchemeMetaState
+  items: AppItem[] // 数组引用，不拷贝
+  groupOrigins: Map<number, string> // Map 引用，不拷贝
+}
+
+/**
+ * 【快照捕获器】
+ * 零开销抓取当前的画面家具情况。用于撤回动作记录前的垫底。
+ */
+export function captureSchemeSnapshot(scheme: HomeScheme): SchemeTransactionSnapshot {
+  return {
+    meta: {
+      name: scheme.name.value,
+      filePath: scheme.filePath.value,
+      lastModified: scheme.lastModified.value,
+    },
+    items: scheme.items.value,
+    groupOrigins: scheme.groupOrigins.value,
+  }
+}
+
+// ========== 克隆工具 ==========
+
+export function cloneAppItem(item: AppItem): AppItem {
+  return structuredClone(item)
+}
+
+export function cloneAppItems(items: AppItem[]): AppItem[] {
+  return structuredClone(items)
+}
+
+function cloneSchemeMeta(meta: SchemeMetaState): SchemeMetaState {
+  return {
+    name: meta.name,
+    filePath: meta.filePath,
+    lastModified: meta.lastModified,
+  }
+}
+
+function cloneGroupOriginsToEntries(
+  groupOrigins: Map<number, string> | Array<[number, string]>
+): Array<[number, string]> {
+  const entries = groupOrigins instanceof Map ? Array.from(groupOrigins.entries()) : groupOrigins
+  return entries
+    .map(([groupId, itemId]) => [groupId, itemId] as [number, string])
+    .sort((left, right) => left[0] - right[0] || left[1].localeCompare(right[1]))
+}
+
+// 保留对外导出（cloudScheme 等仍使用）
+export { cloneGroupOriginsToEntries as cloneGroupOriginsEntries }
+
+// ========== 事务构建 ==========
+
+function isSchemeMetaEqual(left: SchemeMetaState, right: SchemeMetaState) {
+  return (
+    left.name === right.name &&
+    left.filePath === right.filePath &&
+    left.lastModified === right.lastModified
+  )
+}
+
+/**
+ * 【核心算法】通过引用比较（===）来极速抓取哪些内容被用户改了，并生成事务账单 (EditorTransaction)。
+ *
+ * 举例：
+ * 场景里有 10000 个家具。
+ * 用户通过 Gizmo 手柄拖动了其中的 3 个。
+ *
+ * 步骤如下：
+ * 1. 程序发现 9997 个家具在前后快照中 内存地址一致 (===成立)，一瞬间跳过。
+ * 2. 程序发现 3 个家具在经过更新后地址变了。把他们存下来，装进 patch_items 账单。
+ *
+ * @returns 差异交易账单。如果一模一样什么都没改，则返回 null 代表"空记录不用存"
+ */
+export function buildTransactionByRef(params: {
+  schemeId: string
+  intent: string
+  before: SchemeTransactionSnapshot
+  after: SchemeTransactionSnapshot
+}): EditorTransaction | null {
+  const { schemeId, intent, before, after } = params
+  const ops: EditorOperation[] = []
+
+  // 1. 检查文档头信息的变更（方案名什么的改没改）
+  if (!isSchemeMetaEqual(before.meta, after.meta)) {
+    ops.push({
+      type: 'set_scheme_meta',
+      before: cloneSchemeMeta(before.meta),
+      after: cloneSchemeMeta(after.meta),
+    })
+  }
+
+  // 2. 检查家具变更（最耗时的重头戏）
+  // 建立前后字典以便通过家具有没有增减 ID 来判定情况
+  const beforeMap = new Map(before.items.map((item) => [item.internalId, item]))
+  const afterMap = new Map(after.items.map((item) => [item.internalId, item]))
+
+  const changes: PatchItemChange[] = []
+  const removedItems: AppItem[] = []
+
+  // 2.1 遍历操作前的东西
+  for (const [id, beforeItem] of beforeMap) {
+    const afterItem = afterMap.get(id)
+    if (!afterItem) {
+      // 在“后”里找不到这ID了，代表用户刚才操作是把它给删了！
+      removedItems.push(structuredClone(beforeItem))
+      continue
+    }
+    // 💡 重点：如果引用不同，说明它被修改了（它移动了位置、被倒了颜色什么的）
+    // 才真正意义上地执行深层拷贝（以便在历史里冰封它被修改前和修改后的详细参数）
+    if (beforeItem !== afterItem) {
+      changes.push({
+        itemId: id,
+        before: structuredClone(beforeItem),
+        after: structuredClone(afterItem),
+      })
+    }
+  }
+
+  // 2.2 找新增了什么东西：遍历“后”的东西查它是否原本并不存在
+  const addedItems: AppItem[] = []
+  for (const afterItem of after.items) {
+    if (!beforeMap.has(afterItem.internalId)) {
+      addedItems.push(structuredClone(afterItem))
+    }
+  }
+
+  // 开列操作清单
+  if (changes.length > 0) {
+    ops.push({ type: 'patch_items', changes })
+  }
+  if (addedItems.length > 0) {
+    ops.push({ type: 'add_items', items: addedItems })
+  }
+  if (removedItems.length > 0) {
+    ops.push({ type: 'remove_items', items: removedItems })
+  }
+
+  // 3. 检查是否有编组的原点关系变更
+  if (before.groupOrigins !== after.groupOrigins) {
+    ops.push({
+      type: 'set_group_origins',
+      before: cloneGroupOriginsToEntries(before.groupOrigins),
+      after: cloneGroupOriginsToEntries(after.groupOrigins),
+    })
+  }
+
+  // 4. 一张空头支票不需记录到脑海里，直接返回废弃
+  if (ops.length === 0) {
+    return null
+  }
+
+  // 装成一套连贯的“交易”(Transaction)，供服务器或系统分发
+  return {
+    id: crypto.randomUUID(),
+    schemeId,
+    createdAt: Date.now(),
+    intent,
+    ops,
+  }
+}
+
+// ========== 事务重放与数据流转 ==========
+
+export function createReplayTransaction(transaction: EditorTransaction, intentPrefix?: string) {
+  return {
+    id: crypto.randomUUID(),
+    schemeId: transaction.schemeId,
+    createdAt: Date.now(),
+    intent: intentPrefix ? `${intentPrefix}:${transaction.intent}` : transaction.intent,
+    ops: structuredClone(transaction.ops),
+  } satisfies EditorTransaction
+}
+
+/**
+ * 读取一个现有的事务，制造该事务的“时光倒流版本”。
+ * 譬如：里面记录了“把家具加了 5 个缩放”，那么逆事务就会对应写着“把这 5 个缩放给减小回去”。
+ */
+export function invertEditorTransaction(transaction: EditorTransaction): EditorTransaction {
+  // 注意，动作逆推就像穿衣服：
+  // 正常步骤：穿短裤(1) -> 穿长裤(2)
+  // 脱衣服(逆推)：脱长裤(2) -> 脱短裤(1)
+  // 所以需要把整个动作记录 .reverse() 一下。
+  const reversedOps = [...transaction.ops].reverse().map<EditorOperation>((operation) => {
+    switch (operation.type) {
+      case 'patch_items':
+        // 参数调换对侧
+        return {
+          type: 'patch_items',
+          changes: operation.changes.map((change) => ({
+            itemId: change.itemId,
+            before: cloneAppItem(change.after),
+            after: cloneAppItem(change.before),
+          })),
+        }
+      case 'add_items':
+        // 加变删
+        return {
+          type: 'remove_items',
+          items: cloneAppItems(operation.items),
+        }
+      case 'remove_items':
+        // 删变加
+        return {
+          type: 'add_items',
+          items: cloneAppItems(operation.items),
+        }
+      case 'set_group_origins':
+        return {
+          type: 'set_group_origins',
+          before: cloneGroupOriginsToEntries(operation.after),
+          after: cloneGroupOriginsToEntries(operation.before),
+        }
+      case 'set_scheme_meta':
+        return {
+          type: 'set_scheme_meta',
+          before: cloneSchemeMeta(operation.after),
+          after: cloneSchemeMeta(operation.before),
+        }
+    }
+  })
+
+  return {
+    id: crypto.randomUUID(),
+    schemeId: transaction.schemeId,
+    createdAt: Date.now(),
+    intent: `inverse:${transaction.intent}`, // 被调度的标识标记上“逆境”特征
+    ops: reversedOps,
+  }
+}
+
+/**
+ * 分析这笔操作都碰了哪些家具的ID？
+ * 这是专门为了能够让系统分析“别人动的家具和自己动的有冲突不”的功能入口
+ */
+export function collectTransactionTouchedItemIds(transaction: EditorTransaction) {
+  const touchedIds = new Set<string>()
+
+  for (const operation of transaction.ops) {
+    if (operation.type === 'patch_items') {
+      operation.changes.forEach((change) => touchedIds.add(change.itemId))
+    }
+
+    if (operation.type === 'add_items' || operation.type === 'remove_items') {
+      operation.items.forEach((item) => touchedIds.add(item.internalId))
+    }
+  }
+
+  return touchedIds
+}
+
+// ========== 事务应用解析器：将打包的步骤释放运行施加在实体场景 ==========
+
+/**
+ * 我们改变过一些家具有没有带来自增ID的最大值问题？同步清理修复下
+ */
+function recomputeSchemeAllocators(scheme: HomeScheme) {
+  let maxInstanceId = 999
+  let maxGroupId = 0
+
+  for (const item of scheme.items.value) {
+    if (item.instanceId > maxInstanceId) maxInstanceId = item.instanceId
+    if (item.groupId > maxGroupId) maxGroupId = item.groupId
+  }
+
+  scheme.maxInstanceId.value = Math.max(scheme.maxInstanceId.value, maxInstanceId)
+  scheme.maxGroupId.value = Math.max(scheme.maxGroupId.value, maxGroupId)
+}
+
+/**
+ * 这是一个执行器函数（类似 Redux 的 reduce 函数），它负责读懂那些“逆向交易”又或者是“云端同步来的交易”，
+ * 并把它们真枪实弹地写进 Vue 响应式的界面之中。
+ */
+export function applyEditorTransactionToScheme(scheme: HomeScheme, transaction: EditorTransaction) {
+  let nextItems = cloneAppItems(scheme.items.value)
+  let nextGroupOrigins = new Map<number, string>(scheme.groupOrigins.value)
+
+  for (const operation of transaction.ops) {
+    switch (operation.type) {
+      case 'patch_items': {
+        const changeMap = new Map(operation.changes.map((change) => [change.itemId, change.after]))
+        // .map 的方式就是每次返回新数组而不影响原始指涉，以确保系统性能被压榨到极致（能复用的尽皆复用）
+        nextItems = nextItems.map((item) => {
+          const nextItem = changeMap.get(item.internalId)
+          return nextItem ? cloneAppItem(nextItem) : item
+        })
+        break
+      }
+      case 'add_items': {
+        const incomingItems = new Map(
+          operation.items.map((item) => [item.internalId, cloneAppItem(item)] as const)
+        )
+
+        // 因为可能是覆盖同名ID元素
+        nextItems = nextItems.map((item) => incomingItems.get(item.internalId) ?? item)
+
+        const existingIds = new Set(nextItems.map((item) => item.internalId))
+        const appendedItems = operation.items
+          .filter((item) => !existingIds.has(item.internalId))
+          .map(cloneAppItem)
+
+        // 挂载
+        nextItems = [...nextItems, ...appendedItems]
+        break
+      }
+      case 'remove_items': {
+        const removedIds = new Set(operation.items.map((item) => item.internalId))
+        // 抛去要求删除的条目
+        nextItems = nextItems.filter((item) => !removedIds.has(item.internalId))
+        break
+      }
+      case 'set_group_origins': {
+        nextGroupOrigins = new Map(operation.after)
+        break
+      }
+      case 'set_scheme_meta': {
+        scheme.name.value = operation.after.name
+        scheme.filePath.value = operation.after.filePath
+        scheme.lastModified.value = operation.after.lastModified
+        break
+      }
+    }
+  }
+
+  // 这两句是唯一产生重写渲染开销的地方
+  scheme.items.value = nextItems
+  scheme.groupOrigins.value = nextGroupOrigins
+  recomputeSchemeAllocators(scheme)
+}

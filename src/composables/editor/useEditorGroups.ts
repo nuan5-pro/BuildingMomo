@@ -8,7 +8,7 @@ export function useEditorGroups() {
   const store = useEditorStore()
   // 注意：itemsMap 和 groupsMap 必须在 store 中导出
   const { activeScheme, itemsMap, groupsMap } = storeToRefs(store)
-  const { saveHistory } = useEditorHistory()
+  const { recordTransaction } = useEditorHistory()
 
   // 获取指定组的所有物品（使用 groupsMap 和 itemsMap 优化性能）
   function getGroupItems(groupId: number): AppItem[] {
@@ -46,30 +46,24 @@ export function useEditorGroups() {
       return
     }
 
-    // 保存历史（编辑操作）
-    saveHistory('edit')
-
     const newGroupId = activeScheme.value.maxGroupId.value + 1
 
-    // 原地更新所有选中物品的 GroupID
-    // 因为是 ShallowRef 且 items 已经是 Plain Object，我们可以直接修改并 triggerRef
-    // 避免 map 创建新数组，提高性能
-    const items = activeScheme.value.items.value
-    const selected = activeScheme.value.selectedItemIds.value
+    recordTransaction('group.create', () => {
+      const items = activeScheme.value!.items.value
+      const selected = activeScheme.value!.selectedItemIds.value
 
-    let changed = false
-    for (const item of items) {
-      if (selected.has(item.internalId)) {
-        item.groupId = newGroupId
-        changed = true
-      }
-    }
+      const hasSelected = items.some((item) => selected.has(item.internalId))
+      if (!hasSelected) return
 
-    if (changed) {
-      // 更新方案级别的最大 GroupID（持久化历史最大值）
-      activeScheme.value.maxGroupId.value = newGroupId
+      // 【核心优化点】必须使用 `.map()` 产出新的家具列表，并且只对改动的家具使用 `{...item}` 解构深拷贝。
+      // 如此操作后，没有修改过的家具的内存引用(===)不会变化，
+      // 这能让历史系统立刻“跳过”排查上千个没有动过的对象，极大加速系统！
+      activeScheme.value!.items.value = items.map((item) =>
+        selected.has(item.internalId) ? { ...item, groupId: newGroupId } : item
+      )
+      activeScheme.value!.maxGroupId.value = newGroupId
       store.triggerSceneUpdate()
-    }
+    })
 
     console.log(
       `[Group] 成功创建组 #${newGroupId}，包含 ${activeScheme.value.selectedItemIds.value.size} 个物品`
@@ -92,39 +86,31 @@ export function useEditorGroups() {
       return
     }
 
-    // 保存历史（编辑操作）
-    saveHistory('edit')
+    recordTransaction('group.remove', () => {
+      const items = activeScheme.value!.items.value
+      const selected = activeScheme.value!.selectedItemIds.value
 
-    // 收集要解散的组 ID，用于清除原点
-    const groupIdsToRemove = new Set<number>()
-    const items = activeScheme.value.items.value
-    const selected = activeScheme.value.selectedItemIds.value
-
-    // 原地将所有选中物品的 GroupID 设为 0
-    let changed = false
-    for (const item of items) {
-      if (selected.has(item.internalId) && item.groupId > 0) {
-        groupIdsToRemove.add(item.groupId)
-        item.groupId = 0
-        changed = true
+      const groupIdsToRemove = new Set<number>()
+      for (const item of items) {
+        if (selected.has(item.internalId) && item.groupId > 0) {
+          groupIdsToRemove.add(item.groupId)
+        }
       }
-    }
+      if (groupIdsToRemove.size === 0) return
 
-    if (changed) {
-      // 清除这些组的原点设置
-      const scheme = activeScheme.value
-      groupIdsToRemove.forEach((groupId) => {
-        scheme.groupOrigins.value.delete(groupId)
-      })
-      if (groupIdsToRemove.size > 0) {
-        // 触发 groupOrigins 的响应式更新
-        import('vue').then(({ triggerRef }) => {
-          triggerRef(scheme.groupOrigins)
-        })
-      }
+      // 同上：严格遵循不直接写 item.groupId = 0 而是用解构产出新对象的方法
+      // 维系响应式引用的历史系统的极速快进性能
+      activeScheme.value!.items.value = items.map((item) =>
+        selected.has(item.internalId) && item.groupId > 0 ? { ...item, groupId: 0 } : item
+      )
+
+      const scheme = activeScheme.value!
+      const nextOrigins = new Map(scheme.groupOrigins.value)
+      groupIdsToRemove.forEach((groupId) => nextOrigins.delete(groupId))
+      scheme.groupOrigins.value = nextOrigins
 
       store.triggerSceneUpdate()
-    }
+    })
 
     console.log(`[Group] 已取消 ${activeScheme.value.selectedItemIds.value.size} 个物品的组合`)
   }

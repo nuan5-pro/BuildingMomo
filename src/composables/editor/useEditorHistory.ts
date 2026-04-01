@@ -1,187 +1,513 @@
 import { storeToRefs } from 'pinia'
 import { markRaw } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
-import type { AppItem, HistorySnapshot, HistoryStack } from '../../types/editor'
+import {
+  applyEditorTransactionToScheme,
+  buildTransactionByRef,
+  captureSchemeSnapshot,
+  collectTransactionTouchedItemIds,
+  createReplayTransaction,
+  invertEditorTransaction,
+} from '../../lib/editorTransactions'
+import type {
+  HistoryStack,
+  SelectionHistoryEntry,
+  TransactionHistoryEntry,
+} from '../../types/editor'
 
 export function useEditorHistory() {
   const store = useEditorStore()
-  // 使用 storeToRefs 保持响应性
   const { activeScheme } = storeToRefs(store)
 
-  // 初始化历史栈
+  // ========== 基础数据结构与栈管理 ==========
+
+  /**
+   * 初始化一个全新的历史记录栈
+   * 包含独立的选择状态栈和事务栈，并维护一个自增的 sequence 控制顺序
+   */
   function initHistoryStack(): HistoryStack {
     return {
-      undoStack: [],
-      redoStack: [],
-      maxSize: 50,
+      selectionUndoStack: [],
+      selectionRedoStack: [],
+      transactionUndoStack: [],
+      transactionRedoStack: [],
+      maxSize: 50, // 最大可撤销步数
+      nextSequence: 1, // 全局动作序列号，用于判断哪个操作更新
     }
   }
 
-  // 浅拷贝物品数组（共享 originalData 引用以节省内存）
-  function cloneItems(items: AppItem[]): AppItem[] {
-    // 性能优化：只拷贝基础属性，共享 originalData 引用
-    return items.map((item) => ({
-      ...item,
-      extra: item.extra, // 保持引用，避免重复存储
-    }))
-  }
+  /**
+   * 确保当前激活的方案拥有初始化的历史记录栈
+   * 如果当前方案为空，则返回 null
+   */
+  function ensureHistoryStack(): HistoryStack | null {
+    if (!activeScheme.value) return null
 
-  // 深拷贝选择集合
-  function cloneSelection(selection: Set<string>): Set<string> {
-    return new Set(selection)
-  }
-
-  // 保存历史记录
-  function saveHistory(type: 'edit' | 'selection' = 'edit') {
-    if (!activeScheme.value) return
-
-    // 确保历史栈已初始化
-    // history 也是 shallowRef，需要 .value 访问
     if (!activeScheme.value.history.value) {
       activeScheme.value.history.value = initHistoryStack()
     }
 
-    const history = activeScheme.value.history.value!
+    return activeScheme.value.history.value
+  }
 
-    // 方案A：选择操作合并策略
-    // 如果是选择操作且栈顶也是选择操作，则替换而不是新增
-    if (type === 'selection' && history.undoStack.length > 0) {
-      const lastSnapshot = history.undoStack[history.undoStack.length - 1]
-      if (lastSnapshot && lastSnapshot.type === 'selection') {
-        // 仅更新选择集合和时间戳，避免重复深拷贝 items
-        lastSnapshot.selectedItemIds = cloneSelection(activeScheme.value.selectedItemIds.value)
-        lastSnapshot.timestamp = Date.now()
-        return
-      }
+  /**
+   * 辅助函数：克隆选中集合（Selection Set）
+   * 避免由于引用被共享导致撤销重做时发生数据篡改
+   */
+  function cloneSelection(selection: Set<string>): Set<string> {
+    return new Set(selection)
+  }
+
+  /**
+   * 获取并递增全局操作序列号（Sequence）
+   * 每次发生新的历史记录（选区修改 / 状态事务修改），都会取得一个排他性的自增序号
+   * 保证历史前进、后退时的全局先后顺序清晰
+   */
+  function getNextSequence(history: HistoryStack): number {
+    return history.nextSequence++
+  }
+
+  /**
+   * 截断数组（模拟堆栈长度限制）
+   * @param stack 要截断的数组栈
+   * @param maxSize 允许存储的最大动作数
+   */
+  function trimToMaxSize<T>(stack: T[], maxSize: number) {
+    if (stack.length > maxSize) {
+      // 溢出时删除最旧的记录
+      stack.splice(0, stack.length - maxSize)
     }
+  }
 
-    // 创建快照
-    let snapshot: HistorySnapshot
-    if (type === 'selection') {
-      // 选择操作：只保存选择状态，items 设为 null 以减少性能开销
-      snapshot = {
-        items: null,
-        selectedItemIds: cloneSelection(activeScheme.value.selectedItemIds.value),
-        timestamp: Date.now(),
-        type,
-      }
-    } else {
-      // 编辑操作：保存完整的物品数据和选择状态
-      // 传入 items.value
-      snapshot = {
-        items: cloneItems(activeScheme.value.items.value),
-        selectedItemIds: cloneSelection(activeScheme.value.selectedItemIds.value),
-        timestamp: Date.now(),
-        type,
-      }
+  /**
+   * 查看栈顶元素但不弹出
+   */
+  function peek<T>(stack: T[]): T | null {
+    return stack.length > 0 ? stack[stack.length - 1]! : null
+  }
+
+  // ========== Entry (历史操作条目) 构造 ==========
+
+  /**
+   * 构造一条选区历史记录 entry
+   */
+  function createSelectionEntry(
+    selectedItemIds: Set<string>,
+    history: HistoryStack
+  ): SelectionHistoryEntry {
+    return {
+      kind: 'selection',
+      selectedItemIds: cloneSelection(selectedItemIds),
+      sequence: getNextSequence(history), // 分配时序
+      timestamp: Date.now(),
     }
+  }
 
-    // 推入撤销栈
-    // 使用 markRaw 标记快照，阻止 Vue 将其转换为响应式 Proxy
-    // 历史记录是只读数据，不需要响应式追踪，这样可以显著减少内存占用和 GC 压力
-    history.undoStack.push(markRaw(snapshot))
-
-    // 限制栈大小
-    if (history.undoStack.length > history.maxSize) {
-      history.undoStack.shift()
+  /**
+   * 构造一条事务（实质变更）历史记录 entry
+   * 事务除了包括属性/数量变更，还可以保存操作前后的选区信息，确保撤销时能够高亮目标
+   */
+  function createTransactionEntry(
+    entry: Omit<TransactionHistoryEntry, 'kind' | 'sequence' | 'timestamp'>,
+    history: HistoryStack
+  ): TransactionHistoryEntry {
+    return {
+      kind: 'transaction',
+      transaction: entry.transaction,
+      selectionBefore: cloneSelection(entry.selectionBefore),
+      selectionAfter: cloneSelection(entry.selectionAfter),
+      committed: entry.committed, // 云协同模式下的提交状态
+      stale: entry.stale, // 是否成为废弃或过期状态（例如产生了网络冲突）
+      sequence: getNextSequence(history), // 分配时序
+      timestamp: Date.now(),
     }
+  }
 
-    // 清空重做栈（新操作会使重做历史失效）
-    history.redoStack = []
+  // ========== 核心 API：记录操作 ==========
+
+  /**
+   * 记录纯选取修改的行为（被点击选中的物品更改）
+   * 不需要进行大规模的对象 Diff
+   */
+  function recordSelectionChange() {
+    const scheme = activeScheme.value
+    const history = ensureHistoryStack()
+    if (!scheme || !history) return
+
+    // markRaw: 性能优化。避免被放入 Pinia 的时候去深度遍历追踪对象属性
+    history.selectionUndoStack.push(
+      markRaw(createSelectionEntry(scheme.selectedItemIds.value, history))
+    )
+    trimToMaxSize(history.selectionUndoStack, history.maxSize)
+
+    // 新的任何操作都会导致原有的重做分支清空
+    history.selectionRedoStack = []
     store.triggerHistoryUpdate()
   }
 
-  // 撤销操作
-  function undo() {
-    // history 是 shallowRef
-    if (!activeScheme.value?.history.value) return
-    const history = activeScheme.value.history.value
+  /**
+   * 【最核心入口】产生一条真实的修改记录（Transaction）。
+   *
+   * 其工作原理非常像 React 的 `useEffect` 执行前的快照和执行后的快照进行的比较环节。
+   * **由于它使用了严格的引用相等(`===`)机制：如果你传入的函数 `execute` 在内部没有产出
+   *  "新对象的拷贝"，那么系统将会认为该对象的值没有变化从而跳过修改开销；
+   *  反之则会进行非常快且精细的记录。**
+   *
+   * @param intent 意图的前缀（如 'transform.move', 'group.create' 等，用于界面文案呈现以及查错）
+   * @param execute 实际触发数据修改的闭包函数
+   */
+  function recordTransaction<T>(intent: string, execute: () => T): T {
+    const scheme = activeScheme.value
+    if (!scheme) {
+      return execute()
+    }
 
-    if (history.undoStack.length === 0) {
-      console.log('[History] 没有可撤销的操作')
+    // [第①步]：零开销缓存当前的引用状态
+    const before = captureSchemeSnapshot(scheme)
+    const selectionBefore = cloneSelection(scheme.selectedItemIds.value)
+
+    // [第②步]：执行副作用操作，真正修改 activeScheme 里的内容或指针
+    const result = execute()
+
+    // [第③步]：零开销缓存这之后的引用状态
+    const after = captureSchemeSnapshot(scheme)
+    const selectionAfter = cloneSelection(scheme.selectedItemIds.value)
+
+    // [第④步]：比较生成可供回滚的交易日志记录 (基于引用比较而非巨大的深拷贝Diff JSON比对)
+    const transaction = buildTransactionByRef({
+      schemeId: scheme.id,
+      intent,
+      before,
+      after,
+    })
+
+    if (transaction) {
+      const history = ensureHistoryStack()
+      if (!history) return result
+
+      // 生成操作包裹并装载进撤销堆栈（Undo）
+      history.transactionUndoStack.push(
+        markRaw(
+          createTransactionEntry(
+            {
+              transaction,
+              selectionBefore,
+              selectionAfter,
+              // 如果不在云协同房间，或者本方案就是本地方案，那么被视为立即生效（即被 commit）
+              committed: scheme.source.value !== 'cloud',
+              stale: false,
+            },
+            history
+          )
+        )
+      )
+      trimToMaxSize(history.transactionUndoStack, history.maxSize)
+      // 操作后打破原有的重做可能性分支
+      history.transactionRedoStack = []
+
+      // 让界面或 Pinia 监控者知道历史发生过变动
+      store.triggerHistoryUpdate()
+
+      // 如果属于云协同操作，这把交易放入队列排队等候发往服务器
+      if (scheme.source.value === 'cloud') {
+        store.enqueuePendingTransaction(transaction)
+      }
+    }
+
+    return result
+  }
+
+  // ========== undo/redo 目标选择逻辑 ==========
+
+  /**
+   * 检查一条事务记录是否安全/可用。
+   * 特别是在云协同模式下，必须判断该事件是否已被服务端接受（committed）
+   * 以及当前是否仍有堵塞的上行事务在发送中（pendingTransaction 为空）。
+   */
+  function canUseTransactionEntry(entry: TransactionHistoryEntry | null): boolean {
+    const scheme = activeScheme.value
+    if (!scheme || !entry) return false
+
+    // 本地不协同模式永远可以直接撤销重做
+    if (scheme.source.value !== 'cloud') {
+      return true
+    }
+
+    // 尚有排队的未定操作，阻止撤销以防止网络数据覆写带来的多重幻觉时空
+    if (store.peekPendingTransaction(scheme.id)) {
+      return false
+    }
+
+    return entry.committed && !entry.stale
+  }
+
+  type StackTarget =
+    | { type: 'selection'; entry: SelectionHistoryEntry }
+    | { type: 'transaction'; entry: TransactionHistoryEntry }
+
+  /**
+   * 从 Selection 操作栈 和 Transaction 基础动作栈 的「栈顶」抽选最符合逻辑的下个回撤目标。
+   *
+   * 由于可能先动了家具、然后点击变更了选区；这时在用户心智模型里：
+   * 撤回的第一步往往应该是刚刚改变的『选择框』，然后再回到家具摆放的位置。
+   *
+   * @returns 判断并返回最高序列号的可用撤回内容，如果事务被锁了就Fallback到选区
+   */
+  function getStackTarget(
+    selectionStack: SelectionHistoryEntry[],
+    transactionStack: TransactionHistoryEntry[]
+  ): StackTarget | null {
+    const selEntry = peek(selectionStack)
+    const txEntry = peek(transactionStack)
+    const canUseTx = canUseTransactionEntry(txEntry)
+
+    // 如果两者并存，比较 Sequence (谁更大谁就是后发生的谁就先被倒回去处理)
+    if (selEntry && canUseTx && txEntry) {
+      return selEntry.sequence > txEntry.sequence
+        ? { type: 'selection', entry: selEntry }
+        : { type: 'transaction', entry: txEntry }
+    }
+
+    // 如果事务合规且存在就返回事务
+    if (canUseTx && txEntry) return { type: 'transaction', entry: txEntry }
+    // 如果只是有选区记录，或者事务记录处于被云端网络锁定状态，但选区可以改回去那就返回选区
+    if (selEntry) return { type: 'selection', entry: selEntry }
+
+    return null
+  }
+
+  // ========== undo/redo (执行倒退或快进) ==========
+
+  /**
+   * 恢复选取状态
+   */
+  function restoreSelectionEntry(entry: SelectionHistoryEntry) {
+    if (!activeScheme.value) return
+
+    activeScheme.value.selectedItemIds.value = cloneSelection(entry.selectedItemIds)
+    store.triggerSelectionUpdate()
+  }
+
+  /**
+   * 执行对一条事务记录的撤回。
+   * @param entry 我们希望倒回的那笔交易记录
+   */
+  function undoTransaction(entry: TransactionHistoryEntry) {
+    const scheme = activeScheme.value!
+    const history = scheme.history.value!
+
+    // [管理栈] 把它从 Undo 端推送到 Redo 以备可能的快进
+    history.transactionRedoStack.push(markRaw(createTransactionEntry(entry, history)))
+    trimToMaxSize(history.transactionRedoStack, history.maxSize)
+
+    // 判断处理数据的方式
+    if (scheme.source.value === 'cloud') {
+      // 1. 对于协同云模式：不可以直接原位回滚数据。我们必须将此次撤回也“打包为一笔独立的反相交易”。
+      // 这样其他人收到时，同样可以知道如何退后操作。
+      const inverse = createReplayTransaction(invertEditorTransaction(entry.transaction), 'undo')
+      applyEditorTransactionToScheme(scheme, inverse)
+      store.enqueuePendingTransaction(inverse)
+    } else {
+      // 2. 本地模式：直接用这个事物的“逆指令”来套回到当前文档场景即可
+      applyEditorTransactionToScheme(scheme, invertEditorTransaction(entry.transaction))
+    }
+
+    // [收尾工作] 最后必须重置回当时操作发生前的选区，以便使用者能清晰明确他们回退了什么物体
+    scheme.selectedItemIds.value = cloneSelection(entry.selectionBefore)
+    store.triggerSceneUpdate()
+    store.triggerSelectionUpdate()
+    store.triggerHistoryUpdate()
+  }
+
+  /**
+   * 执行对一条事务记录的重新做(快进)
+   * 和 undo 极为神似。
+   */
+  function redoTransaction(entry: TransactionHistoryEntry) {
+    const scheme = activeScheme.value!
+    const history = scheme.history.value!
+
+    if (scheme.source.value === 'cloud') {
+      // 在云上，把快进重新打作一笔新交易向服务器推送
+      const replayed = createReplayTransaction(entry.transaction, 'redo')
+
+      // 因为向 Undo 栈归案保存是一个在未来不应该被视为合规的动作，需要附加上各种状态限制
+      history.transactionUndoStack.push(
+        markRaw(
+          createTransactionEntry(
+            {
+              transaction: replayed,
+              selectionBefore: entry.selectionBefore,
+              selectionAfter: entry.selectionAfter,
+              committed: false,
+              stale: false,
+            },
+            history
+          )
+        )
+      )
+      trimToMaxSize(history.transactionUndoStack, history.maxSize)
+      // 在本地施加变换效果并上传
+      applyEditorTransactionToScheme(scheme, replayed)
+      store.enqueuePendingTransaction(replayed)
+    } else {
+      // 把它从 redo 推回 undo
+      history.transactionUndoStack.push(markRaw(createTransactionEntry(entry, history)))
+      trimToMaxSize(history.transactionUndoStack, history.maxSize)
+      // 施加正向转换计算效果
+      applyEditorTransactionToScheme(scheme, entry.transaction)
+    }
+
+    // 由于是快进，所以把选区设置为当时的改变结束后（selectionAfter）的样子
+    scheme.selectedItemIds.value = cloneSelection(entry.selectionAfter)
+    store.triggerSceneUpdate()
+    store.triggerSelectionUpdate()
+    store.triggerHistoryUpdate()
+  }
+
+  /**
+   * 获取意向去倒退的步骤行为。此入口通常由快捷键 Ctrl+Z 点击调用。
+   */
+  function undo() {
+    const scheme = activeScheme.value
+    const history = scheme?.history.value
+    if (!scheme || !history) {
+      console.log('[History] 没有可撤销的操作或历史栈未就绪')
+      return // 安全退出
+    }
+
+    // 请求解析最优的下一步应该撤销的内容（是选区，还是真正在发生物品变化的回退？）
+    const target = getStackTarget(history.selectionUndoStack, history.transactionUndoStack)
+    if (!target) {
+      console.log('[History] 尚未存在任何可以撤销的新数据了。')
       return
     }
 
-    // 保存当前状态到重做栈
-    const currentSnapshot: HistorySnapshot = {
-      items: cloneItems(activeScheme.value.items.value),
-      selectedItemIds: cloneSelection(activeScheme.value.selectedItemIds.value),
-      timestamp: Date.now(),
-      type: 'edit', // 重做栈不区分类型
+    // 只撤回调色、重选等虚假UI层的东西
+    if (target.type === 'selection') {
+      const entry = history.selectionUndoStack.pop()!
+      // 将现有的推去“快进堆栈”备份
+      history.selectionRedoStack.push(
+        markRaw(createSelectionEntry(scheme.selectedItemIds.value, history))
+      )
+      trimToMaxSize(history.selectionRedoStack, history.maxSize)
+      // 修改数据让UI响应
+      restoreSelectionEntry(entry)
+      store.triggerHistoryUpdate()
+      return
     }
-    // 同样使用 markRaw 阻止响应式包裹
-    history.redoStack.push(markRaw(currentSnapshot))
 
-    // 从撤销栈弹出并恢复状态
-    const snapshot = history.undoStack.pop()!
-
-    if (snapshot.type === 'edit') {
-      // 编辑操作：恢复物品和选择状态
-      if (snapshot.items) {
-        activeScheme.value.items.value = cloneItems(snapshot.items)
-      }
-      activeScheme.value.selectedItemIds.value = cloneSelection(snapshot.selectedItemIds)
-      store.triggerSceneUpdate()
-    } else if (snapshot.type === 'selection') {
-      // 选择操作：只恢复选择状态，避免不必要的物品深拷贝
-      activeScheme.value.selectedItemIds.value = cloneSelection(snapshot.selectedItemIds)
-    }
-    store.triggerSelectionUpdate()
-    store.triggerHistoryUpdate()
-
-    console.log(`[History] 撤销操作 (类型: ${snapshot.type})`)
+    // 真正地撤回物品数据
+    const entry = history.transactionUndoStack.pop()!
+    undoTransaction(entry)
   }
 
-  // 重做操作
+  /**
+   * 获取意向去快进的步骤行为（也就是撤回的后悔药）。此入口通常由快捷键 Ctrl+Y / Shift+Ctrl+Z 调用。
+   */
   function redo() {
-    if (!activeScheme.value?.history.value) return
-    const history = activeScheme.value.history.value
-
-    if (history.redoStack.length === 0) {
+    const scheme = activeScheme.value
+    const history = scheme?.history.value
+    if (!scheme || !history) {
       console.log('[History] 没有可重做的操作')
       return
     }
 
-    // 保存当前状态到撤销栈
-    const currentSnapshot: HistorySnapshot = {
-      items: cloneItems(activeScheme.value.items.value),
-      selectedItemIds: cloneSelection(activeScheme.value.selectedItemIds.value),
-      timestamp: Date.now(),
-      type: 'edit',
+    const target = getStackTarget(history.selectionRedoStack, history.transactionRedoStack)
+    if (!target) {
+      console.log('[History] 没有可重做的操作')
+      return
     }
-    // 同样使用 markRaw 阻止响应式包裹
-    history.undoStack.push(markRaw(currentSnapshot))
 
-    // 从重做栈弹出并恢复状态
-    const snapshot = history.redoStack.pop()!
-
-    if (snapshot.type === 'edit') {
-      if (snapshot.items) {
-        activeScheme.value.items.value = cloneItems(snapshot.items)
-      }
-      activeScheme.value.selectedItemIds.value = cloneSelection(snapshot.selectedItemIds)
-      store.triggerSceneUpdate()
-    } else if (snapshot.type === 'selection') {
-      activeScheme.value.selectedItemIds.value = cloneSelection(snapshot.selectedItemIds)
+    if (target.type === 'selection') {
+      const entry = history.selectionRedoStack.pop()!
+      history.selectionUndoStack.push(
+        markRaw(createSelectionEntry(scheme.selectedItemIds.value, history))
+      )
+      trimToMaxSize(history.selectionUndoStack, history.maxSize)
+      restoreSelectionEntry(entry)
+      store.triggerHistoryUpdate()
+      return
     }
-    store.triggerSelectionUpdate()
-    store.triggerHistoryUpdate()
 
-    console.log('[History] 重做操作')
+    const entry = history.transactionRedoStack.pop()!
+    redoTransaction(entry)
   }
 
-  // 检查是否可以撤销
   function canUndo(): boolean {
-    return (activeScheme.value?.history.value?.undoStack.length ?? 0) > 0
+    const history = activeScheme.value?.history.value
+    if (!history) return false
+    return getStackTarget(history.selectionUndoStack, history.transactionUndoStack) !== null
   }
 
-  // 检查是否可以重做
   function canRedo(): boolean {
-    return (activeScheme.value?.history.value?.redoStack.length ?? 0) > 0
+    const history = activeScheme.value?.history.value
+    if (!history) return false
+    return getStackTarget(history.selectionRedoStack, history.transactionRedoStack) !== null
   }
 
+  // ========== 云协同标记与脏数据状态关联 ==========
+
+  /**
+   * 将在协同服务器成功处理（并向你发出 Ack 的回复记录）进行状态变更：
+   * 将它的 committed 字段设置为 true.
+   *
+   * 必须被设置为 true(不再处于 pending状态)才能让这步交易可撤回。
+   */
+  function markTransactionCommitted(schemeId: string, transactionId: string) {
+    const scheme = store.getSchemeById(schemeId)
+    const history = scheme?.history.value
+    if (!history) return
+
+    for (const stackEntry of [...history.transactionUndoStack, ...history.transactionRedoStack]) {
+      if (stackEntry.transaction.id === transactionId) {
+        stackEntry.committed = true
+      }
+    }
+
+    store.triggerHistoryUpdate()
+  }
+
+  /**
+   * 重要！如果协同环境下某人在当前位置拉了你昨天放的沙发位置并且变大缩放它，
+   * 系统需要知道自己先前的那些旧步骤可能“不能再被原封不动且合理地撤销了”。如果不加这种机制
+   * 人们就会产生诡异的前往未来的“不可预测的时空错位”，这种问题称作 “Stale Undo (废旧过期撤销)”。
+   * 此方法标记受到服务器覆盖冲突的历史节点为 stale: true。
+   */
+  function markTransactionsStale(schemeId: string, touchedItemIds: Set<string>) {
+    if (touchedItemIds.size === 0) return
+
+    const scheme = store.getSchemeById(schemeId)
+    const history = scheme?.history.value
+    if (!history) return
+
+    let changed = false
+    // 检查历史动作里，有谁关联的家具有在这个新发生的事件(受到别人的物品拖曳或添加事件)中被触摸过
+    for (const stackEntry of [...history.transactionUndoStack, ...history.transactionRedoStack]) {
+      if (stackEntry.stale) continue // 如果本就废弃就无需二次标注
+
+      const localTouchedIds = collectTransactionTouchedItemIds(stackEntry.transaction)
+      for (const itemId of touchedItemIds) {
+        if (localTouchedIds.has(itemId)) {
+          // 找到了：这笔自己的旧记录试图修改的部分，被别人(别人服务器端)截胡了
+          stackEntry.stale = true
+          changed = true
+          break
+        }
+      }
+    }
+
+    if (changed) {
+      store.triggerHistoryUpdate()
+    }
+  }
+
+  // 供应用逻辑所挂载的接口面
   return {
-    saveHistory,
+    recordSelectionChange,
+    recordTransaction,
+    markTransactionCommitted,
+    markTransactionsStale,
     undo,
     redo,
     canUndo,

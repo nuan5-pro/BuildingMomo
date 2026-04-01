@@ -17,7 +17,7 @@ const editorStore = useEditorStore()
 const gameDataStore = useGameDataStore()
 const uiStore = useUIStore()
 const { getGroupItems, groupSelected, ungroupSelected, clearGroupOrigin } = useEditorGroups()
-const { saveHistory } = useEditorHistory()
+const { recordTransaction } = useEditorHistory()
 const { deselectItems } = useEditorSelection()
 const { t, locale } = useI18n()
 
@@ -201,8 +201,10 @@ function applyInstanceIdChange() {
     return
   }
 
-  saveHistory('edit')
-  const changed = editorStore.setItemInstanceId(item.internalId, nextInstanceId)
+  let changed = false
+  recordTransaction('item.instance_id.set', () => {
+    changed = editorStore.setItemInstanceId(item.internalId, nextInstanceId)
+  })
   instanceIdInput.value = String(changed ? nextInstanceId : item.instanceId)
 }
 
