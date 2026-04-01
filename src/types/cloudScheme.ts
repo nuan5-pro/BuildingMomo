@@ -21,6 +21,26 @@ export interface CloudPresenceUser {
   connectedAt: number
 }
 
+export type CloudHistoryEventType =
+  | 'remote_tx'
+  | 'user_joined'
+  | 'user_left'
+  | 'connected'
+  | 'reconnected'
+  | 'conflict_reload'
+
+export interface CloudHistoryEvent {
+  id: string
+  type: CloudHistoryEventType
+  createdAt: number
+  actorClientId?: string
+  actorDisplayName?: string
+  itemCount?: number
+  addedCount?: number
+  removedCount?: number
+  updatedCount?: number
+}
+
 export interface CreateCloudSchemeResponse {
   roomCode: string
   document: CloudSchemeDocument

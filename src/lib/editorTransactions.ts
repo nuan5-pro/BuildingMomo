@@ -293,41 +293,59 @@ function recomputeSchemeAllocators(scheme: HomeScheme) {
  * 并把它们真枪实弹地写进 Vue 响应式的界面之中。
  */
 export function applyEditorTransactionToScheme(scheme: HomeScheme, transaction: EditorTransaction) {
-  let nextItems = cloneAppItems(scheme.items.value)
+  // 执行阶段使用“浅拷贝数组 + 命中项替换”策略，避免整表 structuredClone
+  let nextItems = scheme.items.value.slice()
   let nextGroupOrigins = new Map<number, string>(scheme.groupOrigins.value)
+  let needsAllocatorRecompute = false
+  let idToIndex: Map<string, number> | null = null
+
+  function ensureIdToIndex() {
+    if (idToIndex) return idToIndex
+    idToIndex = new Map<string, number>()
+    for (let index = 0; index < nextItems.length; index++) {
+      idToIndex.set(nextItems[index]!.internalId, index)
+    }
+    return idToIndex
+  }
 
   for (const operation of transaction.ops) {
     switch (operation.type) {
       case 'patch_items': {
-        const changeMap = new Map(operation.changes.map((change) => [change.itemId, change.after]))
-        // .map 的方式就是每次返回新数组而不影响原始指涉，以确保系统性能被压榨到极致（能复用的尽皆复用）
-        nextItems = nextItems.map((item) => {
-          const nextItem = changeMap.get(item.internalId)
-          return nextItem ? cloneAppItem(nextItem) : item
-        })
+        const indexMap = ensureIdToIndex()
+        for (const change of operation.changes) {
+          const index = indexMap.get(change.itemId)
+          if (index === undefined) continue
+          nextItems[index] = cloneAppItem(change.after)
+          if (
+            change.before.instanceId !== change.after.instanceId ||
+            change.before.groupId !== change.after.groupId
+          ) {
+            needsAllocatorRecompute = true
+          }
+        }
         break
       }
       case 'add_items': {
-        const incomingItems = new Map(
-          operation.items.map((item) => [item.internalId, cloneAppItem(item)] as const)
-        )
-
-        // 因为可能是覆盖同名ID元素
-        nextItems = nextItems.map((item) => incomingItems.get(item.internalId) ?? item)
-
-        const existingIds = new Set(nextItems.map((item) => item.internalId))
-        const appendedItems = operation.items
-          .filter((item) => !existingIds.has(item.internalId))
-          .map(cloneAppItem)
-
-        // 挂载
-        nextItems = [...nextItems, ...appendedItems]
+        const indexMap = ensureIdToIndex()
+        for (const incoming of operation.items) {
+          const existingIndex = indexMap.get(incoming.internalId)
+          const clonedIncoming = cloneAppItem(incoming)
+          if (existingIndex === undefined) {
+            nextItems.push(clonedIncoming)
+            indexMap.set(incoming.internalId, nextItems.length - 1)
+          } else {
+            nextItems[existingIndex] = clonedIncoming
+          }
+        }
+        needsAllocatorRecompute = true
         break
       }
       case 'remove_items': {
         const removedIds = new Set(operation.items.map((item) => item.internalId))
         // 抛去要求删除的条目
         nextItems = nextItems.filter((item) => !removedIds.has(item.internalId))
+        idToIndex = null
+        needsAllocatorRecompute = true
         break
       }
       case 'set_group_origins': {
@@ -346,5 +364,7 @@ export function applyEditorTransactionToScheme(scheme: HomeScheme, transaction: 
   // 这两句是唯一产生重写渲染开销的地方
   scheme.items.value = nextItems
   scheme.groupOrigins.value = nextGroupOrigins
-  recomputeSchemeAllocators(scheme)
+  if (needsAllocatorRecompute) {
+    recomputeSchemeAllocators(scheme)
+  }
 }

@@ -16,10 +16,32 @@ import type {
 
 const DISPLAY_NAME_STORAGE_KEY = 'cloud_scheme_display_name'
 
-let socket: WebSocket | null = null
+// 单个云协同连接在前端的“唯一会话对象”。
+// 整个文件围绕它运作：谁是 currentSession，谁才有资格收发消息。
+interface CloudSession {
+  roomCode: string
+  displayName: string
+  clientId: string
+  schemeId: string | null
+  socket: WebSocket | null
+  inFlightTransactionId: string | null
+}
+
+// 当前仍然有效的云协同会话。
+// 只允许存在一个；新会话开始时，旧会话会被立即作废。
+let currentSession: CloudSession | null = null
 let stopTransactionWatch: (() => void) | null = null
 const isApplyingRemoteUpdate = ref(false)
-const inFlightTransactionId = ref<string | null>(null)
+
+// presence 对比用快照（模块级，避免多处 useCloudSchemeSync() 时 disconnect 清不到正确 ref）
+const previousPresenceUsers = ref<{ clientId: string; displayName: string }[]>([])
+const pendingConnectedEventType = ref<'connected' | 'reconnected' | null>(null)
+
+// createRoom / joinRoom 中会改动 activeSchemeId，需暂时抑制「按标签切换重连」以免打断当前入房
+let suppressActiveTabCloudSync = 0
+
+// 保证只注册一次：激活方案变化时维持「单连接 ↔ 当前云方案 tab」
+let activeSchemeCloudWatchRegistered = false
 
 function createClientId() {
   return crypto.randomUUID()
@@ -33,8 +55,43 @@ function normalizeRoomCode(value?: string) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+// 创建一个新的前端会话对象。
+// 注意：这里还没有真正连接服务器，只是先把本地状态容器准备好。
+function createSession(displayName: string, roomCode = ''): CloudSession {
+  return {
+    roomCode,
+    displayName,
+    clientId: createClientId(),
+    schemeId: null,
+    socket: null,
+    inFlightTransactionId: null,
+  }
+}
+
+// 判断某个异步回调对应的 session 是否仍然是“当前会话”。
+// 如果不是，就说明它已经过期，必须忽略它，避免旧连接污染当前状态。
+function isActiveSession(session: CloudSession | null) {
+  return !!session && currentSession === session
+}
+
+// 关闭某个会话持有的 WebSocket。
+// 这里不直接管全局状态，只负责把这个 session 自己的 socket 关掉。
+function closeSessionSocket(session: CloudSession | null) {
+  if (!session?.socket) return
+
+  const socket = session.socket
+  session.socket = null
+
+  if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+    socket.close()
+  }
+}
+
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init)
+  const response = await fetch(input, {
+    ...init,
+    credentials: 'include',
+  })
   const data = await response.json()
   if (!response.ok) {
     throw new Error(data.error || 'Request failed')
@@ -48,6 +105,27 @@ export function useCloudSchemeSync() {
   const { markTransactionCommitted, markTransactionsStale } = useEditorHistory()
   const notification = useNotification()
   const { t } = useI18n()
+
+  function notifyCloudApiError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message === 'Room not found') {
+      notification.error(t('cloudScheme.error.roomNotFound'))
+      return
+    }
+    if (message === 'Room already exists') {
+      notification.error(t('cloudScheme.error.roomAlreadyExists'))
+      return
+    }
+    if (message === 'Authentication required') {
+      notification.error(t('cloudScheme.error.authRequired'))
+      return
+    }
+    if (!message || message === 'Request failed') {
+      notification.error(t('cloudScheme.error.connectFailed'))
+      return
+    }
+    notification.error(t('cloudScheme.error.requestFailed', { reason: message }))
+  }
 
   const currentCloudScheme = computed(() => {
     const scheme = editorStore.activeScheme
@@ -73,11 +151,101 @@ export function useCloudSchemeSync() {
     localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, name)
   }
 
-  /**
-   * 监听本地事务变更的 Watcher
-   * 当历史记录模块产生一条新的提交时，`transactionVersion` 会跳变，
-   * 进而触发 `flushPendingTransactions` 尝试把这笔账单发往云端。
-   */
+  function createHistoryEventId() {
+    return typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `cloud_evt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  function appendHistoryEvent(
+    event: Omit<
+      Parameters<typeof cloudStore.appendHistoryEvent>[0],
+      'id' | 'createdAt' | 'actorDisplayName'
+    > & {
+      actorDisplayName?: string
+    }
+  ) {
+    let actorDisplayName = event.actorDisplayName
+
+    if (!actorDisplayName && event.actorClientId) {
+      actorDisplayName = cloudStore.users.find(
+        (user) => user.clientId === event.actorClientId
+      )?.displayName
+    }
+
+    cloudStore.appendHistoryEvent({
+      id: createHistoryEventId(),
+      type: event.type,
+      createdAt: Date.now(),
+      actorClientId: event.actorClientId,
+      actorDisplayName,
+      itemCount: event.itemCount,
+      addedCount: event.addedCount,
+      removedCount: event.removedCount,
+      updatedCount: event.updatedCount,
+    })
+  }
+
+  function summarizeRemoteTransaction(transaction: { ops: unknown[] }) {
+    let addedCount = 0
+    let removedCount = 0
+    let updatedCount = 0
+
+    for (const operation of transaction.ops) {
+      if (!operation || typeof operation !== 'object') continue
+      const maybeOperation = operation as {
+        type?: string
+        items?: unknown[]
+        changes?: unknown[]
+      }
+
+      if (maybeOperation.type === 'add_items') {
+        addedCount += Array.isArray(maybeOperation.items) ? maybeOperation.items.length : 0
+      } else if (maybeOperation.type === 'remove_items') {
+        removedCount += Array.isArray(maybeOperation.items) ? maybeOperation.items.length : 0
+      } else if (maybeOperation.type === 'patch_items') {
+        updatedCount += Array.isArray(maybeOperation.changes) ? maybeOperation.changes.length : 0
+      }
+    }
+
+    const itemCount = addedCount + removedCount + updatedCount
+    return { itemCount, addedCount, removedCount, updatedCount }
+  }
+
+  function appendPresenceHistory(users: { clientId: string; displayName: string }[]) {
+    const previousUsersById = new Map(
+      previousPresenceUsers.value.map((user) => [user.clientId, user])
+    )
+    const nextUsersById = new Map(users.map((user) => [user.clientId, user]))
+
+    for (const user of users) {
+      if (!previousUsersById.has(user.clientId)) {
+        appendHistoryEvent({
+          type: 'user_joined',
+          actorClientId: user.clientId,
+          actorDisplayName: user.displayName,
+        })
+      }
+    }
+
+    for (const user of previousPresenceUsers.value) {
+      if (!nextUsersById.has(user.clientId)) {
+        appendHistoryEvent({
+          type: 'user_left',
+          actorClientId: user.clientId,
+          actorDisplayName: user.displayName,
+        })
+      }
+    }
+
+    previousPresenceUsers.value = users.map((user) => ({
+      clientId: user.clientId,
+      displayName: user.displayName,
+    }))
+  }
+
+  // 监听本地编辑事务队列。
+  // 只要事务版本、云端修订号、连接状态等发生变化，就尝试把待发送事务推给服务器。
   function ensureTransactionWatcher() {
     if (stopTransactionWatch) return
 
@@ -100,12 +268,17 @@ export function useCloudSchemeSync() {
     stopTransactionWatch = null
   }
 
-  async function applyRemoteDocument(document: CloudSchemeDocument) {
+  // 用云端发回来的完整文档替换本地方案内容。
+  // 它既用于首次加入房间，也用于冲突重置、整份快照覆盖等场景。
+  function applyRemoteDocument(document: CloudSchemeDocument, session?: CloudSession | null) {
+    if (session && !isActiveSession(session)) {
+      return
+    }
+
     isApplyingRemoteUpdate.value = true
-    inFlightTransactionId.value = null
 
     try {
-      let schemeId = cloudStore.schemeId
+      let schemeId = session?.schemeId || cloudStore.schemeId
       if (!schemeId) {
         schemeId = editorStore.openCloudSchemeSnapshot(document.scheme, document.roomCode)
       } else {
@@ -122,6 +295,13 @@ export function useCloudSchemeSync() {
         source: 'cloud',
         cloudRoomCode: document.roomCode,
       })
+
+      if (session && isActiveSession(session)) {
+        session.schemeId = schemeId
+        session.roomCode = document.roomCode
+        session.inFlightTransactionId = null
+      }
+
       cloudStore.schemeId = schemeId
       cloudStore.revision = document.revision
       cloudStore.status = 'connected'
@@ -130,10 +310,6 @@ export function useCloudSchemeSync() {
     }
   }
 
-  /**
-   * 接收来自其他使用者的远程事务快照更新事件。
-   * 此方法被用来接收从远端直接“空降”过来的 `applyEditorTransactionToScheme` 补丁，并将其应用。
-   */
   function applyCommittedTransaction(transaction: { schemeId: string; ops: unknown[] }) {
     const scheme = editorStore.getSchemeById(transaction.schemeId)
     if (!scheme) return
@@ -141,49 +317,64 @@ export function useCloudSchemeSync() {
     isApplyingRemoteUpdate.value = true
     try {
       applyEditorTransactionToScheme(scheme, transaction as never)
-      triggerRef(scheme.groupOrigins) // 原点关系的改动单独触发强刷新
+      triggerRef(scheme.groupOrigins)
       editorStore.triggerSceneUpdate()
     } finally {
       isApplyingRemoteUpdate.value = false
     }
   }
 
-  /**
-   * 将当前挂起等待（Pending）发往云端的编辑操作发送给 WebSocket。
-   * 同一台电脑、同一时间绝对不能有第二笔交易正在“飞行中”，必须等到对方应答（Ack）或发生冲突（Conflict/Reset）。
-   */
+  // 把当前方案里“排队等待上传”的下一条事务发给服务端。
+  // 这里故意一次只允许飞一条，避免前后顺序乱掉。
   async function flushPendingTransactions() {
+    const session = currentSession
+    if (!session) return
     if (isApplyingRemoteUpdate.value) return
-    if (!socket || socket.readyState !== WebSocket.OPEN) return
-    if (!cloudStore.isConnected || !cloudStore.schemeId) return
-    if (inFlightTransactionId.value) return
+    if (!session.socket || session.socket.readyState !== WebSocket.OPEN) return
+    if (!cloudStore.isConnected || !session.schemeId) return
+    if (cloudStore.schemeId !== session.schemeId) return
+    if (session.inFlightTransactionId) return
 
-    // 通过队列取出第一条待发送事务
-    const transaction = editorStore.peekPendingTransaction(cloudStore.schemeId)
+    const transaction = editorStore.peekPendingTransaction(session.schemeId)
     if (!transaction) return
 
-    inFlightTransactionId.value = transaction.id
+    session.inFlightTransactionId = transaction.id
     cloudStore.status = 'syncing'
-    socket.send(
+    session.socket.send(
       JSON.stringify({
         type: 'push_tx',
-        clientId: cloudStore.clientId,
+        clientId: session.clientId,
         baseRevision: cloudStore.revision,
         transaction,
       })
     )
   }
 
-  function handleIncomingMessage(raw: string) {
+  // WebSocket 消息总入口。
+  // 先确认消息来自当前有效 session，再根据消息类型分别处理。
+  function handleIncomingMessage(session: CloudSession, raw: string) {
+    if (!isActiveSession(session)) {
+      return
+    }
+
     const message = JSON.parse(raw) as CloudWsIncomingMessage
 
     switch (message.type) {
       case 'hello':
         cloudStore.revision = message.revision
         cloudStore.status = 'connected'
+        if (pendingConnectedEventType.value) {
+          appendHistoryEvent({
+            type: pendingConnectedEventType.value,
+            actorClientId: session.clientId,
+            actorDisplayName: session.displayName,
+          })
+          pendingConnectedEventType.value = null
+        }
         void flushPendingTransactions()
         return
       case 'presence':
+        appendPresenceHistory(message.users)
         cloudStore.users = message.users
         return
       case 'error':
@@ -191,34 +382,45 @@ export function useCloudSchemeSync() {
         notification.error(message.message)
         return
       case 'reset':
-        if (cloudStore.schemeId) {
-          editorStore.clearPendingTransactions(cloudStore.schemeId)
+        if (session.schemeId) {
+          editorStore.clearPendingTransactions(session.schemeId)
         }
-        inFlightTransactionId.value = null
-        void applyRemoteDocument(message.document)
+        session.inFlightTransactionId = null
+        applyRemoteDocument(message.document, session)
         cloudStore.status = 'conflict'
+        appendHistoryEvent({
+          type: 'conflict_reload',
+          actorClientId: session.clientId,
+          actorDisplayName: session.displayName,
+        })
         notification.warning(t('cloudScheme.toast.conflict'))
         return
       case 'snapshot':
-        void applyRemoteDocument(message.document)
+        applyRemoteDocument(message.document, session)
         return
       case 'tx_committed':
         cloudStore.revision = message.revision
         cloudStore.status = 'connected'
         applyCommittedTransaction(message.transaction)
 
-        if (message.authorClientId === cloudStore.clientId) {
+        if (message.authorClientId === session.clientId) {
           editorStore.acknowledgePendingTransaction(message.transaction.id)
           markTransactionCommitted(message.transaction.schemeId, message.transaction.id)
-          inFlightTransactionId.value = null
+          session.inFlightTransactionId = null
         }
 
-        if (message.authorClientId !== cloudStore.clientId) {
-          markTransactionsStale(
-            message.transaction.schemeId,
-            collectTransactionTouchedItemIds(message.transaction)
-          )
-          notification.info(t('cloudScheme.toast.remoteUpdated'))
+        if (message.authorClientId !== session.clientId) {
+          const touchedItemIds = collectTransactionTouchedItemIds(message.transaction)
+          const transactionSummary = summarizeRemoteTransaction(message.transaction)
+          markTransactionsStale(message.transaction.schemeId, touchedItemIds)
+          appendHistoryEvent({
+            type: 'remote_tx',
+            actorClientId: message.authorClientId,
+            itemCount: transactionSummary.itemCount || touchedItemIds.size,
+            addedCount: transactionSummary.addedCount,
+            removedCount: transactionSummary.removedCount,
+            updatedCount: transactionSummary.updatedCount,
+          })
         }
 
         void flushPendingTransactions()
@@ -226,78 +428,132 @@ export function useCloudSchemeSync() {
     }
   }
 
-  async function connectSocket(params: {
-    roomCode: string
-    clientId: string
-    displayName: string
-  }) {
-    if (socket) {
-      socket.close()
-      socket = null
-    }
+  // 建立当前 session 的 WebSocket 连接。
+  // 即使旧 socket 晚到 open / close，也会因为 session 身份不匹配而被忽略。
+  async function connectSocket(session: CloudSession) {
+    closeSessionSocket(session)
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/cloud-schemes/ws?code=${encodeURIComponent(params.roomCode)}&clientId=${encodeURIComponent(params.clientId)}&displayName=${encodeURIComponent(params.displayName)}`
+    const wsUrl = `${protocol}//${window.location.host}/api/cloud-schemes/ws?code=${encodeURIComponent(session.roomCode)}&clientId=${encodeURIComponent(session.clientId)}&displayName=${encodeURIComponent(session.displayName)}`
 
-    await new Promise<void>((resolve, reject) => {
+    return new Promise<boolean>((resolve, reject) => {
       const nextSocket = new WebSocket(wsUrl)
+      session.socket = nextSocket
       let settled = false
 
+      const resolveOnce = (value: boolean) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+
+      const rejectOnce = (error: Error) => {
+        if (settled) return
+        settled = true
+        reject(error)
+      }
+
       nextSocket.addEventListener('open', () => {
-        socket = nextSocket
-        if (!settled) {
-          settled = true
-          resolve()
+        if (!isActiveSession(session) || session.socket !== nextSocket) {
+          nextSocket.close()
+          resolveOnce(false)
+          return
         }
+
+        resolveOnce(true)
       })
 
       nextSocket.addEventListener('message', (event) => {
-        handleIncomingMessage(event.data)
+        if (!isActiveSession(session) || session.socket !== nextSocket) {
+          return
+        }
+
+        handleIncomingMessage(session, event.data)
       })
 
       nextSocket.addEventListener('close', () => {
-        if (socket === nextSocket) {
-          socket = null
-          inFlightTransactionId.value = null
+        if (session.socket === nextSocket) {
+          session.socket = null
+        }
+
+        if (isActiveSession(session)) {
+          session.inFlightTransactionId = null
           if (cloudStore.roomCode) {
             cloudStore.status = 'disconnected'
           }
         }
+
+        resolveOnce(false)
       })
 
       nextSocket.addEventListener('error', () => {
-        if (!settled) {
-          settled = true
-          reject(new Error('WebSocket connection failed'))
+        if (!isActiveSession(session) || session.socket !== nextSocket) {
+          resolveOnce(false)
+          return
         }
+
+        rejectOnce(new Error('WebSocket connection failed'))
         cloudStore.setError(t('cloudScheme.error.connectFailed'))
       })
     })
   }
 
-  async function startSession(params: {
-    roomCode: string
-    schemeId: string
-    revision: number
-    displayName: string
-  }) {
-    const clientId = createClientId()
+  // 把一个已经创建好的 session 正式提升为“已入房会话”。
+  // 这里会把 roomCode / schemeId / revision 写入 store，并开始真正连接 WebSocket。
+  async function startSession(
+    session: CloudSession,
+    params: {
+      roomCode: string
+      schemeId: string
+      revision: number
+      connectedEventType: 'connected' | 'reconnected'
+    }
+  ) {
+    if (!isActiveSession(session)) {
+      return false
+    }
+
+    session.roomCode = params.roomCode
+    session.schemeId = params.schemeId
+    session.inFlightTransactionId = null
+
     cloudStore.startSession({
       roomCode: params.roomCode,
       schemeId: params.schemeId,
-      clientId,
+      clientId: session.clientId,
       revision: params.revision,
     })
+    cloudStore.clearHistoryEvents()
+    previousPresenceUsers.value = []
+    pendingConnectedEventType.value = params.connectedEventType
+
     ensureTransactionWatcher()
-    await connectSocket({
-      roomCode: params.roomCode,
-      clientId,
-      displayName: params.displayName,
-    })
+    const connected = await connectSocket(session)
+    return connected && isActiveSession(session)
   }
 
+  // 开启一次新的“入房尝试”。
+  // 最关键的一步是先 disconnect(false)：它会让旧会话彻底失效，保证前端同时只认一个连接。
+  function beginSessionAttempt(displayName: string, roomCode = '') {
+    disconnect(false)
+    const session = createSession(displayName, roomCode)
+    currentSession = session
+    return session
+  }
+
+  // 如果本次尝试中途失败，就把它干净地收掉。
+  function abortSessionAttempt(session: CloudSession) {
+    if (!isActiveSession(session)) {
+      return
+    }
+
+    disconnect(false)
+  }
+
+  // 创建一个新的云方案房间，并把当前本地方案切换成这个云房间对应的方案。
   async function createRoom(options: { roomCode?: string; displayName: string }) {
-    if (!editorStore.activeScheme) {
+    const activeScheme = editorStore.activeScheme
+    if (!activeScheme) {
       notification.warning(t('cloudScheme.error.noActiveScheme'))
       return null
     }
@@ -309,42 +565,59 @@ export function useCloudSchemeSync() {
       return null
     }
 
+    suppressActiveTabCloudSync++
+    const sourceSchemeId = activeScheme.id
+    const snapshot = buildSharedSchemeSnapshot(activeScheme)
+    const session = beginSessionAttempt(displayName, roomCode)
     setStoredDisplayName(displayName)
 
-    const data = await requestJson<CreateCloudSchemeResponse>('/api/cloud-schemes', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        roomCode: roomCode || undefined,
-        snapshot: buildSharedSchemeSnapshot(editorStore.activeScheme),
-      }),
-    })
+    try {
+      const data = await requestJson<CreateCloudSchemeResponse>('/api/cloud-schemes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          roomCode: roomCode || undefined,
+          snapshot,
+        }),
+      })
 
-    disconnect(false)
-    const schemeId = editorStore.normalizeSchemeAsCloudRoom(
-      editorStore.activeScheme.id,
-      data.roomCode,
-      {
-        resetHistory: true,
+      if (!isActiveSession(session)) {
+        return null
       }
-    )
-    if (!schemeId) {
-      throw new Error('Failed to normalize cloud scheme identity')
+
+      const schemeId = editorStore.normalizeSchemeAsCloudRoom(sourceSchemeId, data.roomCode, {
+        resetHistory: true,
+      })
+      if (!schemeId) {
+        throw new Error('Failed to normalize cloud scheme identity')
+      }
+
+      const started = await startSession(session, {
+        roomCode: data.roomCode,
+        schemeId,
+        revision: data.document.revision,
+        connectedEventType: 'connected',
+      })
+
+      if (!started) {
+        abortSessionAttempt(session)
+        return null
+      }
+
+      notification.success(t('cloudScheme.toast.created'))
+      return data.roomCode
+    } catch (error) {
+      abortSessionAttempt(session)
+      notifyCloudApiError(error)
+      return null
+    } finally {
+      suppressActiveTabCloudSync--
     }
-
-    await startSession({
-      roomCode: data.roomCode,
-      schemeId,
-      revision: data.document.revision,
-      displayName,
-    })
-
-    notification.success(t('cloudScheme.toast.created'))
-    return data.roomCode
   }
 
+  // 加入一个已经存在的云方案房间。
   async function joinRoom(options: { roomCode: string; displayName: string }) {
     const roomCode = normalizeRoomCode(options.roomCode)
     const displayName = normalizeDisplayName(options.displayName)
@@ -359,32 +632,50 @@ export function useCloudSchemeSync() {
       return null
     }
 
+    suppressActiveTabCloudSync++
+    const session = beginSessionAttempt(displayName, roomCode)
     setStoredDisplayName(displayName)
 
-    const data = await requestJson<CloudSnapshotResponse>('/api/cloud-schemes/join', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ roomCode }),
-    })
+    try {
+      const data = await requestJson<CloudSnapshotResponse>('/api/cloud-schemes/join', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ roomCode }),
+      })
 
-    disconnect(false)
-    const schemeId = editorStore.openCloudSchemeSnapshot(data.document.scheme, roomCode)
-    editorStore.setSchemeCloudMeta(schemeId, {
-      source: 'cloud',
-      cloudRoomCode: roomCode,
-    })
+      if (!isActiveSession(session)) {
+        return null
+      }
 
-    await startSession({
-      roomCode,
-      schemeId,
-      revision: data.document.revision,
-      displayName,
-    })
+      const schemeId = editorStore.openCloudSchemeSnapshot(data.document.scheme, roomCode)
+      editorStore.setSchemeCloudMeta(schemeId, {
+        source: 'cloud',
+        cloudRoomCode: roomCode,
+      })
 
-    notification.success(t('cloudScheme.toast.joined'))
-    return roomCode
+      const started = await startSession(session, {
+        roomCode,
+        schemeId,
+        revision: data.document.revision,
+        connectedEventType: 'connected',
+      })
+
+      if (!started) {
+        abortSessionAttempt(session)
+        return null
+      }
+
+      notification.success(t('cloudScheme.toast.joined'))
+      return roomCode
+    } catch (error) {
+      abortSessionAttempt(session)
+      notifyCloudApiError(error)
+      return null
+    } finally {
+      suppressActiveTabCloudSync--
+    }
   }
 
   async function copyShareCode() {
@@ -394,6 +685,7 @@ export function useCloudSchemeSync() {
     return true
   }
 
+  // 启动时如果发现当前激活方案本来就是云方案，就尝试静默重连。
   async function reconnectActiveCloudScheme() {
     const scheme = editorStore.activeScheme
     if (!scheme || scheme.source.value !== 'cloud') {
@@ -406,6 +698,8 @@ export function useCloudSchemeSync() {
       return false
     }
 
+    const session = beginSessionAttempt(displayName, roomCode)
+
     try {
       const data = await requestJson<CloudSnapshotResponse>('/api/cloud-schemes/join', {
         method: 'POST',
@@ -415,45 +709,89 @@ export function useCloudSchemeSync() {
         body: JSON.stringify({ roomCode }),
       })
 
-      disconnect(false)
+      if (!isActiveSession(session)) {
+        return false
+      }
+
       const schemeId = editorStore.openCloudSchemeSnapshot(data.document.scheme, roomCode)
       editorStore.setSchemeCloudMeta(schemeId, {
         source: 'cloud',
         cloudRoomCode: roomCode,
       })
 
-      await startSession({
+      const started = await startSession(session, {
         roomCode,
         schemeId,
         revision: data.document.revision,
-        displayName,
+        connectedEventType: 'reconnected',
       })
+
+      if (!started) {
+        abortSessionAttempt(session)
+        return false
+      }
 
       return true
     } catch (error) {
+      abortSessionAttempt(session)
       console.warn('[CloudScheme] Auto reconnect failed:', error)
       return false
     }
   }
 
+  // 主动断开当前云会话。
+  // 会关闭 socket、清理挂起事务、停止 watcher，并把 cloudStore 重置回空状态。
   function disconnect(showToast = true) {
-    if (socket) {
-      socket.close()
-      socket = null
-    }
-
-    if (cloudStore.schemeId) {
-      editorStore.clearPendingTransactions(cloudStore.schemeId)
-    }
-
-    inFlightTransactionId.value = null
-    stopTransactionWatcher()
     const hadSession = !!cloudStore.roomCode
+    const schemeId = cloudStore.schemeId
+    const session = currentSession
+
+    currentSession = null
+    closeSessionSocket(session)
+
+    if (schemeId) {
+      editorStore.clearPendingTransactions(schemeId)
+    }
+
+    stopTransactionWatcher()
+    previousPresenceUsers.value = []
+    pendingConnectedEventType.value = null
     cloudStore.clearSession()
 
     if (hadSession && showToast) {
       notification.info(t('cloudScheme.toast.disconnected'))
     }
+  }
+
+  /**
+   * 当前激活 tab 为云方案且与已连接房间一致 → 不动；否则断掉旧连接并按当前 tab 静默重连。
+   * 非云方案 / 无方案（如文档 tab）→ 断开 WS。
+   */
+  async function syncCloudConnectionToActiveScheme() {
+    if (suppressActiveTabCloudSync > 0) return
+
+    const scheme = editorStore.activeScheme
+    if (!scheme || scheme.source.value !== 'cloud') {
+      disconnect(false)
+      return
+    }
+
+    if (cloudStore.schemeId === scheme.id && cloudStore.isConnected) {
+      return
+    }
+
+    await reconnectActiveCloudScheme()
+  }
+
+  if (!activeSchemeCloudWatchRegistered) {
+    activeSchemeCloudWatchRegistered = true
+    watch(
+      () => editorStore.activeSchemeId,
+      () => {
+        void syncCloudConnectionToActiveScheme()
+      },
+      { flush: 'post' }
+    )
   }
 
   return {
@@ -464,6 +802,7 @@ export function useCloudSchemeSync() {
     joinRoom,
     copyShareCode,
     reconnectActiveCloudScheme,
+    syncCloudConnectionToActiveScheme,
     disconnect,
     getStoredDisplayName,
   }

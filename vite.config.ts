@@ -160,8 +160,10 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // 本地联调：另开 `npm run dev:cloudflare-functions`（wrangler pages dev，默认 8788）。
+      // 将 /api 全部转发到 Pages Functions，否则仅 Vite 时 /api/login、/api/cloud-schemes 会 404。
       proxy: {
-        '/api/cloud-schemes': {
+        '/api': {
           target: cloudApiProxyTarget,
           changeOrigin: true,
           ws: true,

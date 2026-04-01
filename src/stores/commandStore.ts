@@ -161,6 +161,18 @@ export const useCommandStore = defineStore('command', () => {
       },
     },
     {
+      id: 'file.joinCloudScheme',
+      label: t('command.file.joinCloudScheme'),
+      category: 'file',
+      enabled: () => {
+        const settingsStore = useSettingsStore()
+        return import.meta.env.VITE_ENABLE_SECURE_MODE === 'true' && settingsStore.isAuthenticated
+      },
+      execute: () => {
+        console.log('[Command] 加入云方案')
+      },
+    },
+    {
       id: 'file.importFromCode',
       label: t('command.file.importFromCode'),
       category: 'file',
@@ -183,18 +195,6 @@ export const useCommandStore = defineStore('command', () => {
       execute: async () => {
         console.log('[Command] 重新打开最近关闭的方案')
         await editorStore.reopenClosedScheme(0)
-      },
-    },
-    {
-      id: 'file.joinCloudScheme',
-      label: t('command.file.joinCloudScheme'),
-      category: 'file',
-      enabled: () => {
-        const settingsStore = useSettingsStore()
-        return import.meta.env.VITE_ENABLE_SECURE_MODE === 'true' && settingsStore.isAuthenticated
-      },
-      execute: () => {
-        console.log('[Command] 加入云方案')
       },
     },
     {

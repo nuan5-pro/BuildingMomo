@@ -22,6 +22,7 @@ import { useKeyboardShortcuts } from './composables/useKeyboardShortcuts'
 import { useWorkspaceWorker } from './composables/useWorkspaceWorker'
 import { useCloudSchemeSync } from './composables/useCloudSchemeSync'
 import { useUIStore } from './stores/uiStore'
+import { useCommandStore } from './stores/commandStore'
 
 const editorStore = useEditorStore()
 const gameDataStore = useGameDataStore()
@@ -29,10 +30,9 @@ const settingsStore = useSettingsStore()
 const tabStore = useTabStore()
 const uiStore = useUIStore()
 const { restore: restoreWorkspace, isWorkerActive, startMonitoring } = useWorkspaceWorker()
-const { reconnectActiveCloudScheme } = useCloudSchemeSync()
+// 注册云协同单连接与「激活 tab ↔ 房间」同步（内有单例 watch）
+useCloudSchemeSync()
 
-// 导入 commandStore 用于全局命令状态
-import { useCommandStore } from './stores/commandStore'
 const commandStore = useCommandStore()
 const isNarrowViewport = useMediaQuery('(max-width: 767px)')
 const isPortraitViewport = useMediaQuery('(orientation: portrait)')
@@ -147,7 +147,6 @@ onMounted(async () => {
       // 初始化游戏数据（异步加载）
       gameDataStore.initialize()
       await restoreWorkspace()
-      void reconnectActiveCloudScheme()
     } catch (e) {
       console.error('[App] Restore failed:', e)
     } finally {

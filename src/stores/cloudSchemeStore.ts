@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { CloudPresenceUser } from '@/types/cloudScheme'
+import type { CloudHistoryEvent, CloudPresenceUser } from '@/types/cloudScheme'
 
 export type CloudSchemeStatus =
   | 'idle'
@@ -12,12 +12,14 @@ export type CloudSchemeStatus =
   | 'disconnected'
 
 export const useCloudSchemeStore = defineStore('cloudScheme', () => {
+  const MAX_HISTORY_EVENTS = 50
   const roomCode = ref<string | null>(null)
   const schemeId = ref<string | null>(null)
   const clientId = ref<string | null>(null)
   const revision = ref(0)
   const status = ref<CloudSchemeStatus>('idle')
   const users = ref<CloudPresenceUser[]>([])
+  const historyEvents = ref<CloudHistoryEvent[]>([])
   const lastError = ref<string | null>(null)
 
   const isConnected = computed(() => status.value === 'connected' || status.value === 'syncing')
@@ -42,6 +44,14 @@ export const useCloudSchemeStore = defineStore('cloudScheme', () => {
     status.value = 'error'
   }
 
+  function appendHistoryEvent(event: CloudHistoryEvent) {
+    historyEvents.value = [event, ...historyEvents.value].slice(0, MAX_HISTORY_EVENTS)
+  }
+
+  function clearHistoryEvents() {
+    historyEvents.value = []
+  }
+
   function clearSession() {
     roomCode.value = null
     schemeId.value = null
@@ -49,6 +59,7 @@ export const useCloudSchemeStore = defineStore('cloudScheme', () => {
     revision.value = 0
     status.value = 'idle'
     users.value = []
+    clearHistoryEvents()
     lastError.value = null
   }
 
@@ -59,11 +70,14 @@ export const useCloudSchemeStore = defineStore('cloudScheme', () => {
     revision,
     status,
     users,
+    historyEvents,
     lastError,
     isConnected,
     activeUserCount,
     startSession,
     setError,
+    appendHistoryEvent,
+    clearHistoryEvents,
     clearSession,
   }
 })

@@ -228,14 +228,22 @@ export const useSettingsStore = defineStore('settings', () => {
   ): Promise<boolean> {
     isVerifying.value = true
 
-    // 开发环境 + Secure 模式：跳过 API 验证
+    // 开发环境 + Secure 模式：跳过密码校验逻辑，但仍请求 /api/login 以写入 HttpOnly Cookie（云方案等接口依赖）
     if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_SECURE_MODE === 'true') {
       isAuthenticated.value = true
       if (persistPassword) {
         localStorage.setItem(PASSWORD_STORAGE_KEY, password)
       }
+      void fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+        credentials: 'include',
+      }).catch(() => {})
       isVerifying.value = false
-      console.log('[SettingsStore] Dev mode: API verification skipped')
+      console.log(
+        '[SettingsStore] Dev mode: API verification skipped (login fetch best-effort for cookies)'
+      )
       return true
     }
 

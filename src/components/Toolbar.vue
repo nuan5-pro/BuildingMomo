@@ -570,8 +570,8 @@ watch(
             <!-- 在"保存到游戏"、"选择游戏目录"、"从方案码导入"之前添加分隔线 -->
             <MenubarSeparator
               v-if="
-                cmd.id === 'file.importFromCode' ||
                 cmd.id === 'file.joinCloudScheme' ||
+                cmd.id === 'file.reopenLastClosedScheme' ||
                 cmd.id === 'file.import' ||
                 cmd.id === 'file.saveToGame' ||
                 cmd.id === 'file.startWatchMode'

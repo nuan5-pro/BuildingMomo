@@ -8,6 +8,8 @@ import { useUIStore } from '../stores/uiStore'
 import { useCommandStore } from '../stores/commandStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useCloudSchemeStore } from '@/stores/cloudSchemeStore'
+import { joinOnlineDisplayNames } from '@/lib/cloudPresence'
+import type { CloudPresenceUser } from '@/types/cloudScheme'
 import { useI18n } from '@/composables/useI18n'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Copy, AlertTriangle, Layers, EyeOff, Maximize2, RotateCw, Cloud } from 'lucide-vue-next'
@@ -206,20 +208,49 @@ const currentCloudUserCount = computed(() =>
 const cloudPendingTransactionCount = computed(() => editorStore.cloudPendingCount)
 const cloudUndoStale = computed(() => editorStore.hasStaleUndo)
 
-const cloudStatusLabel = computed(() => t(`cloudScheme.status.${currentCloudStatus.value}`))
+const cloudStatusLabel = computed(() => {
+  const raw = currentCloudStatus.value
+  const key = raw === 'syncing' ? 'connected' : raw
+  return t(`cloudScheme.status.${key}`)
+})
+
+const showCloudOnlineSummary = computed(() => currentCloudStatus.value !== 'disconnected')
+
+const isCloudLiveConnected = computed(
+  () => cloudSchemeStore.schemeId === editorStore.activeSchemeId && cloudSchemeStore.isConnected
+)
+
+const cloudStatusShowPending = computed(
+  () => cloudPendingTransactionCount.value > 0 && !isCloudLiveConnected.value
+)
 
 const cloudStatusTooltip = computed(() => {
-  const messages = [t('cloudScheme.statusHint')]
+  const isActiveRoom = cloudSchemeStore.schemeId === editorStore.activeSchemeId
+  const users: CloudPresenceUser[] = isActiveRoom ? cloudSchemeStore.users : []
+  const lines: string[] = []
 
-  if (cloudPendingTransactionCount.value > 0) {
-    messages.push(t('cloudScheme.pendingTransactions', { n: cloudPendingTransactionCount.value }))
+  if (showCloudOnlineSummary.value) {
+    if (users.length === 0) {
+      lines.push(t('cloudScheme.noOnlineUsers'))
+    } else {
+      const names = joinOnlineDisplayNames(
+        users,
+        cloudSchemeStore.clientId,
+        t('cloudScheme.onlineMembersSeparator')
+      )
+      lines.push(t('cloudScheme.onlineMembersLine', { names }))
+    }
+  }
+
+  if (cloudStatusShowPending.value) {
+    lines.push(t('cloudScheme.pendingTransactions', { n: cloudPendingTransactionCount.value }))
   }
 
   if (cloudUndoStale.value) {
-    messages.push(t('cloudScheme.undoStale'))
+    lines.push(t('cloudScheme.undoStale'))
   }
 
-  return messages.join(' · ')
+  return lines.join('\n')
 })
 </script>
 
@@ -266,9 +297,11 @@ const cloudStatusTooltip = computed(() => {
             >
               <Cloud :size="14" />
               <span>{{ cloudStatusLabel }}</span>
-              <span>·</span>
-              <span>{{ t('cloudScheme.onlineUsers', { n: currentCloudUserCount }) }}</span>
-              <template v-if="cloudPendingTransactionCount > 0">
+              <template v-if="showCloudOnlineSummary">
+                <span>·</span>
+                <span>{{ t('cloudScheme.onlineUsers', { n: currentCloudUserCount }) }}</span>
+              </template>
+              <template v-if="cloudStatusShowPending">
                 <span>·</span>
                 <span>{{
                   t('cloudScheme.pendingTransactionsShort', { n: cloudPendingTransactionCount })
@@ -282,7 +315,7 @@ const cloudStatusTooltip = computed(() => {
               </template>
             </div>
           </TooltipTrigger>
-          <TooltipContent>
+          <TooltipContent class="max-w-sm whitespace-pre-line">
             {{ cloudStatusTooltip }}
           </TooltipContent>
         </Tooltip>
