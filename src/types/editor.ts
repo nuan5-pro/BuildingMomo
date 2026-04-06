@@ -140,9 +140,6 @@ export interface FileWatchState {
   fileIndex: Map<string, FileWatchIndexEntry>
   // 变动历史（仅本次会话，不持久化）
   updateHistory: FileWatchHistoryEntry[]
-  // 记录上次导入的文件句柄，用于 saveToGame 回退
-  lastImportedFileHandle: FileSystemFileHandle | null
-  lastImportedFileName: string
 }
 
 // 精确变换参数

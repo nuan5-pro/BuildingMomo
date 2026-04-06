@@ -1,5 +1,7 @@
 // 匹配游戏存档文件名，格式：BUILD_SAVEDATA_<uid>.json 或 WORLDBUILD_SAVEDATA_<uid>.json
 const SAVE_DATA_FILENAME_REGEX = /^(BUILD|WORLDBUILD)_SAVEDATA_(\d+)\.json$/
+// 仅匹配家园 BUILD 存档文件名（不包含 WORLDBUILD）
+const BUILD_PREFIX_SAVE_DATA_FILENAME_REGEX = /^BUILD_SAVEDATA_(\d+)\.json$/
 // 匹配游戏 BuildRecord 文件名，格式：<数字>.record
 const BUILD_RECORD_FILENAME_REGEX = /^\d+\.record$/
 
@@ -33,6 +35,11 @@ export function extractUidFromSaveDataFilename(filename: string): string | null 
 /** 判断文件名是否为游戏存档文件 */
 export function isBuildSaveDataFile(name: string): boolean {
   return SAVE_DATA_FILENAME_REGEX.test(name)
+}
+
+/** 判断文件名是否为 BUILD 前缀的家园存档文件 */
+export function isBuildPrefixSaveDataFile(name: string): boolean {
+  return BUILD_PREFIX_SAVE_DATA_FILENAME_REGEX.test(name)
 }
 
 /** 判断文件名是否为 BuildRecord 文件 */
@@ -152,6 +159,13 @@ export async function findLatestBuildSaveData(
   buildDataDir: FileSystemDirectoryHandle
 ): Promise<LatestFileResult | null> {
   return findLatestFile(buildDataDir, isBuildSaveDataFile, 'BuildData')
+}
+
+/** 在 BuildData 目录中找到最新修改的 BUILD 前缀存档文件 */
+export async function findLatestBuildOnlySaveData(
+  buildDataDir: FileSystemDirectoryHandle
+): Promise<LatestFileResult | null> {
+  return findLatestFile(buildDataDir, isBuildPrefixSaveDataFile, 'BuildData(BUILD-only)')
 }
 
 /** 在 BuildRecord 目录中找到最新修改的 .record 文件 */

@@ -11,6 +11,7 @@ import {
   findX6GameDirectory,
   findBuildDataDirectory,
   findBuildRecordDirectory,
+  findLatestBuildOnlySaveData,
   findLatestBuildRecord,
   findLatestBuildSaveData,
   isBuildSaveDataFile,
@@ -75,8 +76,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     lastCheckedTime: 0,
     fileIndex: new Map(), // 文件名 → 上次已知内容快照，用于变更检测
     updateHistory: [],
-    lastImportedFileHandle: null,
-    lastImportedFileName: '',
   })
 
   // setTimeout 返回的计时器 ID，null 表示轮询未启动
@@ -254,7 +253,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     // 找到最新存档文件（用于初始导入询问）
     const result = await findLatestBuildSaveData(buildDataDir)
 
-    const fileHandle = result?.handle ?? null
     const fileName = result?.file.name ?? ''
     const lastModified = result?.file.lastModified ?? 0
 
@@ -306,8 +304,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       lastCheckedTime: Date.now(),
       fileIndex: fileIndex,
       updateHistory: restoredHistory,
-      lastImportedFileHandle: fileHandle,
-      lastImportedFileName: fileName,
     }
 
     console.log('[FileWatch] Activated monitoring root:', rootDirHandle.name)
@@ -361,7 +357,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
   async function importFromContentInternal(
     content: string,
     fileName: string,
-    handle: FileSystemFileHandle,
     lastModified: number,
     itemCount?: number,
     updateWatchState: boolean = true
@@ -381,10 +376,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       if (importResult.success) {
         console.log(`[FileWatch] Successfully imported: ${fileName}`)
         if (updateWatchState) {
-          // 记录最后一次导入的文件，供 saveToGame 用作写回目标
-          watchState.value.lastImportedFileHandle = handle
-          watchState.value.lastImportedFileName = fileName
-
           const cached = watchState.value.fileIndex.get(fileName)
           const finalItemCount = itemCount ?? getItemCountFromContent(content)
           watchState.value.fileIndex.set(fileName, {
@@ -413,22 +404,20 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
   async function importFromContent(
     content: string,
     fileName: string,
-    handle: FileSystemFileHandle,
     lastModified: number,
     itemCount?: number
   ): Promise<void> {
-    await importFromContentInternal(content, fileName, handle, lastModified, itemCount, true)
+    await importFromContentInternal(content, fileName, lastModified, itemCount, true)
   }
 
   /** 从 BuildRecord 文件内容导入（不更新 fileIndex，避免污染 BuildData 索引） */
   async function importFromRecordContent(
     content: string,
     fileName: string,
-    handle: FileSystemFileHandle,
     lastModified: number,
     itemCount?: number
   ): Promise<void> {
-    await importFromContentInternal(content, fileName, handle, lastModified, itemCount, false)
+    await importFromContentInternal(content, fileName, lastModified, itemCount, false)
   }
 
   /**
@@ -436,8 +425,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
    *
    * 写入目标文件的优先级：
    *   1. scheme 的 filePath 对应的合法存档文件（UID 不是 13 位时视为普通 ID）
-   *   2. 上一次导入的文件（lastImportedFileHandle）
-   *   3. BuildData 目录中最新的存档文件
+   *   2. BuildData 目录中最新的存档文件（默认回退目标）
    *
    * 写入存档后，若找到了 BuildRecord 目录，还会同步更新最新的 .record 文件。
    */
@@ -478,15 +466,10 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         })
         finalFileName = currentFileName
       } else {
-        if (watchState.value.lastImportedFileHandle) {
-          handle = watchState.value.lastImportedFileHandle
-          finalFileName = watchState.value.lastImportedFileName
-        } else {
-          const latest = await findLatestBuildSaveData(watchState.value.dirHandle)
-          if (latest) {
-            handle = latest.handle
-            finalFileName = latest.file.name
-          }
+        const latest = await findLatestBuildOnlySaveData(watchState.value.dirHandle)
+        if (latest) {
+          handle = latest.handle
+          finalFileName = latest.file.name
         }
       }
 
@@ -512,8 +495,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       // 读取写入后的实际 lastModified，加 1000ms 偏移量防止轮询误判为外部变更
       const updatedFile = await handle.getFile()
       const cached = watchState.value.fileIndex.get(finalFileName)
-      watchState.value.lastImportedFileHandle = handle
-      watchState.value.lastImportedFileName = finalFileName
       watchState.value.fileIndex.set(finalFileName, {
         lastModified: updatedFile.lastModified + 1000,
         lastContent: jsonString,
@@ -662,7 +643,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
                 importFromContent(
                   latestFile.content,
                   latestFile.name,
-                  latestFile.handle,
                   latestFile.file.lastModified
                 ).catch((err) => {
                   console.error('[FileWatch] Failed to import from content:', err)
@@ -803,8 +783,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       lastCheckedTime: 0,
       fileIndex: new Map(),
       updateHistory: existingHistory,
-      lastImportedFileHandle: null,
-      lastImportedFileName: '',
     }
     await WatchHandleStore.clearRootHandle()
     console.log('[FileWatch] Watch mode stopped')
@@ -837,7 +815,6 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
             await importFromRecordContent(
               content,
               latestRecord.file.name,
-              latestRecord.handle,
               latestRecord.file.lastModified,
               parsed.PlaceInfo.length
             )
@@ -859,7 +836,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
       }
 
       const content = await result.file.text()
-      await importFromContent(content, result.file.name, result.handle, result.file.lastModified)
+      await importFromContent(content, result.file.name, result.file.lastModified)
     } catch (error: any) {
       console.error('[FileWatch] Failed to import from watched file:', error)
       notification.error(t('fileOps.import.failed', { reason: error.message || 'Unknown error' }))
@@ -909,12 +886,9 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
         return
       }
 
-      // 通过目录句柄获取对应文件的 handle（用于后续写回）
-      const handle = await watchState.value.dirHandle.getFileHandle(snapshot.fileName)
       await importFromContent(
         snapshot.content,
         snapshot.fileName,
-        handle,
         snapshot.lastModified,
         snapshot.itemCount
       )
