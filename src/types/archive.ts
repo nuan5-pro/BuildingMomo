@@ -52,4 +52,5 @@ export interface ArchiveState {
   hasLoaded: boolean
   isLoading: boolean
   selectedGroupId: string
+  loadError: boolean
 }

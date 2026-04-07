@@ -148,6 +148,10 @@ function ensureName(value: string, fallback: string): string {
   return trimmed || fallback
 }
 
+function fallbackNameFromSchemeFile(schemeFile: string): string {
+  return schemeFile.replace(/\.json$/i, '')
+}
+
 async function queryPermissionState(handle: FileSystemHandle): Promise<PermissionState> {
   const options = { mode: 'readwrite' as const }
   return (await (handle as any).queryPermission(options)) as PermissionState
@@ -169,6 +173,7 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
     hasLoaded: false,
     isLoading: false,
     selectedGroupId: ARCHIVE_DEFAULT_GROUP_ID,
+    loadError: false,
   })
 
   async function getArchiveHandles() {
@@ -202,20 +207,54 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
     }
   }
 
-  async function readIndexFromDisk(): Promise<ArchiveIndexFile | null> {
+  async function readIndexFromDisk(): Promise<{
+    index: ArchiveIndexFile | null
+    shouldInitializeFile: boolean
+    hasReadError: boolean
+  }> {
     const handles = await getArchiveHandles()
-    if (!handles) return null
+    if (!handles) {
+      return {
+        index: null,
+        shouldInitializeFile: false,
+        hasReadError: false,
+      }
+    }
 
     try {
       const fileHandle = await handles.archiveDirHandle.getFileHandle(ARCHIVE_INDEX_FILE_NAME)
       const file = await fileHandle.getFile()
       const content = await file.text()
       if (!content.trim()) {
-        return createDefaultArchiveIndex(t('archive.defaultGroup'))
+        return {
+          index: createDefaultArchiveIndex(t('archive.defaultGroup')),
+          shouldInitializeFile: false,
+          hasReadError: true,
+        }
       }
-      return normalizeArchiveIndex(JSON.parse(content), t('archive.defaultGroup'))
+      return {
+        index: normalizeArchiveIndex(JSON.parse(content), t('archive.defaultGroup')),
+        shouldInitializeFile: false,
+        hasReadError: false,
+      }
     } catch (error) {
-      return createDefaultArchiveIndex(t('archive.defaultGroup'))
+      const exceptionName =
+        error && typeof error === 'object' && 'name' in error
+          ? String((error as { name?: unknown }).name)
+          : ''
+      if (exceptionName === 'NotFoundError') {
+        return {
+          index: createDefaultArchiveIndex(t('archive.defaultGroup')),
+          shouldInitializeFile: true,
+          hasReadError: false,
+        }
+      }
+
+      return {
+        index: null,
+        shouldInitializeFile: false,
+        hasReadError: true,
+      }
     }
   }
 
@@ -240,6 +279,117 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
     const file = await schemeFileHandle.getFile()
     const content = await file.text()
     return JSON.parse(content) as ArchivedSchemeFile
+  }
+
+  async function reconcileArchiveIndexWithDisk(index: ArchiveIndexFile): Promise<{
+    index: ArchiveIndexFile
+    changed: boolean
+    recoveredCount: number
+  } | null> {
+    const handles = await getArchiveHandles()
+    if (!handles) return null
+
+    const diskSchemeFiles = new Map<
+      string,
+      { archivedAt?: number; schemeName?: string; itemCount: number; lastModified: number }
+    >()
+    for await (const dirEntry of (handles.schemesDirHandle as any).values()) {
+      if (dirEntry.kind !== 'file') continue
+      const fileName = String(dirEntry.name || '')
+      if (!fileName.toLowerCase().endsWith('.json')) continue
+
+      const fileHandle = dirEntry as FileSystemFileHandle
+      const file = await fileHandle.getFile()
+      const lastModified = file.lastModified
+      let archivedAt: number | undefined
+      let schemeName: string | undefined
+      let itemCount = 0
+
+      try {
+        const parsed = JSON.parse(await file.text()) as Partial<ArchivedSchemeFile>
+        archivedAt = typeof parsed.archivedAt === 'number' ? parsed.archivedAt : undefined
+        if (parsed.scheme && typeof parsed.scheme === 'object') {
+          schemeName =
+            typeof parsed.scheme.name === 'string' ? ensureName(parsed.scheme.name, '') : undefined
+          itemCount = Array.isArray(parsed.scheme.items) ? parsed.scheme.items.length : 0
+        }
+      } catch (error) {
+        // 孤儿修复不应被单个损坏文件中断；无法解析时降级使用文件名和时间。
+      }
+
+      diskSchemeFiles.set(fileName, {
+        archivedAt,
+        schemeName,
+        itemCount,
+        lastModified,
+      })
+    }
+
+    let changed = false
+    let recoveredCount = 0
+    const sortedEntries = [...index.entries].sort(compareByOrder)
+    const seenSchemeFiles = new Set<string>()
+    const retainedEntries: ArchiveEntry[] = []
+
+    for (const entry of sortedEntries) {
+      if (!diskSchemeFiles.has(entry.schemeFile)) {
+        changed = true
+        continue
+      }
+      if (seenSchemeFiles.has(entry.schemeFile)) {
+        changed = true
+        continue
+      }
+      seenSchemeFiles.add(entry.schemeFile)
+      retainedEntries.push(entry)
+    }
+
+    const defaultGroupEntries = retainedEntries.filter(
+      (entry) => entry.groupId === ARCHIVE_DEFAULT_GROUP_ID
+    )
+    let nextDefaultOrder = defaultGroupEntries.length
+
+    for (const [schemeFile, meta] of diskSchemeFiles.entries()) {
+      if (seenSchemeFiles.has(schemeFile)) continue
+      const timestamp = meta.archivedAt ?? meta.lastModified ?? Date.now()
+      retainedEntries.push({
+        id: generateUUID(),
+        name: ensureName(
+          meta.schemeName || fallbackNameFromSchemeFile(schemeFile),
+          t('scheme.unnamed')
+        ),
+        groupId: ARCHIVE_DEFAULT_GROUP_ID,
+        schemeFile,
+        order: nextDefaultOrder,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        itemCount: meta.itemCount,
+      })
+      nextDefaultOrder += 1
+      recoveredCount += 1
+      changed = true
+    }
+
+    const orderCounters = new Map<string, number>()
+    const normalizedEntries = retainedEntries.sort(compareByOrder).map((entry) => {
+      const nextOrder = orderCounters.get(entry.groupId) ?? 0
+      orderCounters.set(entry.groupId, nextOrder + 1)
+      if (entry.order !== nextOrder) {
+        changed = true
+        return { ...entry, order: nextOrder }
+      }
+      return entry
+    })
+
+    return {
+      index: {
+        ...index,
+        updatedAt: changed ? Date.now() : index.updatedAt,
+        entries: normalizedEntries,
+      },
+      changed,
+      recoveredCount,
+    }
   }
 
   async function runExclusive(task: () => Promise<boolean>) {
@@ -283,18 +433,32 @@ export function createArchiveOps(params: CreateArchiveOpsParams) {
 
     archiveState.value.isLoading = true
     try {
-      const index = await readIndexFromDisk()
+      const { index, shouldInitializeFile, hasReadError } = await readIndexFromDisk()
       if (!index) return false
+      if (hasReadError) {
+        archiveState.value.loadError = true
+        notification.error(t('fileOps.archive.loadFailed'))
+        return false
+      }
+      const reconciled = await reconcileArchiveIndexWithDisk(index)
+      if (!reconciled) return false
 
-      syncState(index)
+      syncState(reconciled.index)
       archiveState.value.hasLoaded = true
-      await writeIndexToDisk({
-        ...archiveState.value.index,
-        updatedAt: Date.now(),
-      })
+      archiveState.value.loadError = false
+      if (shouldInitializeFile || reconciled.changed) {
+        await writeIndexToDisk({
+          ...archiveState.value.index,
+          updatedAt: Date.now(),
+        })
+      }
+      if (reconciled.recoveredCount > 0) {
+        notification.success(t('archive.toast.recovered', { n: reconciled.recoveredCount }))
+      }
       return true
     } catch (error) {
       console.error('[Archive] Failed to load archive index:', error)
+      archiveState.value.loadError = true
       notification.error(t('fileOps.archive.loadFailed'))
       return false
     } finally {

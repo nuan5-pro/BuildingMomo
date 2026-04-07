@@ -256,6 +256,8 @@ export const zhLocale = {
     moveToGroup: '移动到分组',
     emptyGroup: '当前分组暂无方案',
     loading: '正在读取方案集...',
+    loadError: '方案集索引读取失败，已停止写入以保护现有数据。',
+    retryLoad: '重试读取',
     itemCount: '{n} 个物品',
     defaultGroupLocked: '默认分组不可删除',
     groupNotEmpty: '分组不为空，请先移走或删除其中的方案',
@@ -272,6 +274,7 @@ export const zhLocale = {
       updated: '已更新方案集条目',
       moved: '已移动到“{group}”',
       groupDeleted: '分组及其方案已删除',
+      recovered: '已恢复 {n} 个历史方案到默认分组',
     },
   },
 

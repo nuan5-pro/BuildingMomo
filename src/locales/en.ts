@@ -260,6 +260,8 @@ export const enLocale = {
     moveToGroup: 'Move to Group',
     emptyGroup: 'No schemes in this group',
     loading: 'Loading Scheme Sets...',
+    loadError: 'Failed to read archive index. Writes are blocked to protect existing data.',
+    retryLoad: 'Retry',
     itemCount: '{n} items',
     defaultGroupLocked: 'Default group cannot be deleted',
     groupNotEmpty: 'Group is not empty. Move or delete its schemes first.',
@@ -276,6 +278,7 @@ export const enLocale = {
       updated: 'Scheme Set entry updated',
       moved: 'Moved to "{group}"',
       groupDeleted: 'Group and its schemes deleted',
+      recovered: 'Recovered {n} historical schemes to Default Group',
     },
   },
 

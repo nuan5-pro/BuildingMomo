@@ -67,7 +67,10 @@ const groupCounts = computed(() => {
   return counts
 })
 const canSaveCurrentScheme = computed(
-  () => tabStore.activeTab?.type === 'scheme' && !!editorStore.activeScheme
+  () =>
+    tabStore.activeTab?.type === 'scheme' &&
+    !!editorStore.activeScheme &&
+    !archiveState.value.loadError
 )
 const canUpdateCurrentScheme = computed(
   () => tabStore.activeTab?.type === 'scheme' && !!editorStore.activeScheme
@@ -178,6 +181,10 @@ async function handleDeleteGroup(groupId: string, groupName: string) {
 async function handleSaveCurrentScheme() {
   if (!editorStore.activeScheme) return
   await commandStore.fileOps.archiveScheme(editorStore.activeScheme.id, selectedGroupId.value)
+}
+
+async function handleRetryLoadArchive() {
+  await commandStore.fileOps.loadArchiveIndex(true)
 }
 
 async function handleOpenEntry(entryId: string) {
@@ -377,6 +384,17 @@ async function handleMoveEntryToGroup(entryId: string, targetGroupId: string) {
           class="px-4 py-8 text-center text-xs text-muted-foreground"
         >
           {{ t('archive.loading') }}
+        </div>
+        <div v-else-if="archiveState.loadError" class="px-4 py-8 text-center">
+          <div class="text-xs text-destructive">{{ t('archive.loadError') }}</div>
+          <Button
+            variant="outline"
+            size="sm"
+            class="mt-3 h-7 text-xs"
+            @click="handleRetryLoadArchive"
+          >
+            {{ t('archive.retryLoad') }}
+          </Button>
         </div>
         <div
           v-else-if="selectedEntries.length === 0"
