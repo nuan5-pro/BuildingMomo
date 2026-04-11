@@ -27,7 +27,7 @@ import type {
   RegionCenterCandidate,
 } from './types'
 import { initBVH } from './bvh'
-import { MAX_RENDER_INSTANCES } from '@/types/constants'
+import { requiredInstanceCount } from '@/lib/renderInstanceBudget'
 import { invalidateScene } from '@/composables/useSceneInvalidate'
 
 // 全局 BVH 初始化标志（确保只初始化一次）
@@ -219,7 +219,7 @@ export function useThreeInstancedRenderer(isTransformDragging?: Ref<boolean>) {
     // 非 Model 模式：构建全局索引映射
     const items = editorStore.activeScheme?.items.value ?? []
     const map = new Map<number, string>()
-    const instanceCount = Math.min(items.length, MAX_RENDER_INSTANCES)
+    const instanceCount = requiredInstanceCount(items.length)
 
     for (let index = 0; index < instanceCount; index++) {
       const item = items[index]

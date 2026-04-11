@@ -3,6 +3,7 @@ import { BoxGeometry, InstancedMesh, DynamicDrawUsage, Sphere, Vector3 } from 't
 import { useEditorStore } from '@/stores/editorStore'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { applyScaleRenderCompensationToPositionInPlace } from '@/lib/scaleRenderCompensation'
+import { nextInstancedPoolCapacity, requiredInstanceCount } from '@/lib/renderInstanceBudget'
 import { createBoxMaterial } from '../shared/materials'
 import {
   scratchMatrix,
@@ -12,10 +13,14 @@ import {
   scratchScale,
   scratchColor,
 } from '../shared/scratchObjects'
-import { MAX_RENDER_INSTANCES as MAX_INSTANCES } from '@/types/constants'
 
 // 当缺少尺寸信息时使用的默认尺寸（游戏坐标：X=长, Y=宽, Z=高）
 const DEFAULT_FURNITURE_SIZE: [number, number, number] = [100, 100, 150]
+
+function detachInstancedMesh(mesh: InstancedMesh) {
+  mesh.geometry = null as any
+  mesh.material = null as any
+}
 
 /**
  * Box 渲染模式
@@ -39,21 +44,34 @@ export function useBoxMode() {
 
   const material = createBoxMaterial(0.9)
 
-  // 创建 InstancedMesh
-  const mesh = new InstancedMesh(baseGeometry, material, MAX_INSTANCES)
-  mesh.frustumCulled = false
-  mesh.boundingSphere = new Sphere(new Vector3(0, 0, 0), Infinity)
-  mesh.instanceMatrix.setUsage(DynamicDrawUsage)
-  mesh.count = 0
+  const instancedMesh = ref<InstancedMesh | null>(null)
 
-  const instancedMesh = ref<InstancedMesh | null>(markRaw(mesh))
+  function ensureMeshPool(requiredInstances: number) {
+    const current = instancedMesh.value?.instanceMatrix.count ?? 0
+    const targetPool = nextInstancedPoolCapacity(requiredInstances, current)
+    if (instancedMesh.value && current >= targetPool) return
+
+    if (instancedMesh.value) {
+      detachInstancedMesh(instancedMesh.value)
+    }
+    const mesh = new InstancedMesh(baseGeometry, material, targetPool)
+    mesh.frustumCulled = false
+    mesh.boundingSphere = new Sphere(new Vector3(0, 0, 0), Infinity)
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage)
+    mesh.count = 0
+    instancedMesh.value = markRaw(mesh)
+  }
 
   /**
    * 重建所有实例
    */
   function rebuild() {
     const items = editorStore.activeScheme?.items.value ?? []
-    const instanceCount = Math.min(items.length, MAX_INSTANCES)
+    const instanceCount = requiredInstanceCount(items.length)
+    ensureMeshPool(instanceCount)
+
+    const mesh = instancedMesh.value
+    if (!mesh) return
 
     mesh.count = instanceCount
 
@@ -114,8 +132,7 @@ export function useBoxMode() {
     baseGeometry.dispose()
     material.dispose()
     if (instancedMesh.value) {
-      instancedMesh.value.geometry = null as any
-      instancedMesh.value.material = null as any
+      detachInstancedMesh(instancedMesh.value)
       instancedMesh.value = null
     }
   }

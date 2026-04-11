@@ -26,7 +26,7 @@ import {
   scratchLookAtTarget,
   scratchQuaternion,
 } from '../shared/scratchObjects'
-import { MAX_RENDER_INSTANCES as MAX_INSTANCES } from '@/types/constants'
+import { nextInstancedPoolCapacity, requiredInstanceCount } from '@/lib/renderInstanceBudget'
 
 /**
  * Icon 渲染模式
@@ -44,8 +44,8 @@ export function useIconMode() {
   let planeGeometry: PlaneGeometry | null = null
   let iconMaterial: ShaderMaterial | null = null
   let iconMesh: InstancedMesh | null = null
-  // 纹理索引属性数组（复用，按最大实例数分配）
-  const textureIndices = new Float32Array(MAX_INSTANCES)
+  /** 与 InstancedMesh 池长度一致，随扩容替换 */
+  let textureIndices = new Float32Array(0)
 
   const iconInstancedMesh = ref<InstancedMesh | null>(null)
 
@@ -55,30 +55,49 @@ export function useIconMode() {
   // 存储当前的图标 up 向量（用于约束旋转，防止绕法线旋转）
   const currentIconUp = ref<[number, number, number] | null>(null)
 
+  function detachIconMesh() {
+    if (!iconMesh) return
+    iconMesh.geometry = null as any
+    iconMesh.material = null as any
+    iconMesh = null
+  }
+
   /**
-   * 确保图标相关资源已初始化
+   * 确保纹理层数、实例池几何属性与 InstancedMesh 容量满足本次重建需求。
+   * @param textureLayerCapacity 纹理数组层数下限（唯一 gameId 规模）
+   * @param requiredInstances 本帧需要的实例数（已按用户硬顶裁剪）
    */
-  function ensureIconResources(minCapacity: number = 32) {
-    if (iconInstancedMesh.value) return
+  function ensureIconResources(textureLayerCapacity: number, requiredInstances: number) {
+    const arrayTexture = iconManager.initTextureArray(textureLayerCapacity)
 
-    console.log(`[IconMode] 初始化图标资源，请求容量: ${minCapacity}`)
+    const currentMeshCapacity = iconMesh?.instanceMatrix.count ?? 0
+    const targetPool = nextInstancedPoolCapacity(requiredInstances, currentMeshCapacity)
 
-    // 1. 初始化纹理数组
-    // 如果已经初始化过且容量足够，initTextureArray 内部会直接返回现有纹理
-    const arrayTexture = iconManager.initTextureArray(minCapacity)
+    let resizedIndices = false
+    if (textureIndices.length < targetPool) {
+      const nextBuf = new Float32Array(targetPool)
+      nextBuf.set(textureIndices.subarray(0, Math.min(textureIndices.length, targetPool)))
+      textureIndices = nextBuf
+      resizedIndices = true
+    }
 
-    // 2. 初始化几何体
     if (!planeGeometry) {
       planeGeometry = new PlaneGeometry(100, 100)
-      // 为每个实例添加纹理索引属性（1个float: 纹理层索引）
       planeGeometry.setAttribute('textureIndex', new InstancedBufferAttribute(textureIndices, 1))
-      // 构建 BVH 加速结构
+      planeGeometry.computeBoundsTree({
+        setBoundingBox: true,
+      })
+    } else if (resizedIndices) {
+      if (planeGeometry.boundsTree) {
+        planeGeometry.disposeBoundsTree()
+      }
+      planeGeometry.setAttribute('textureIndex', new InstancedBufferAttribute(textureIndices, 1))
       planeGeometry.computeBoundsTree({
         setBoundingBox: true,
       })
     }
 
-    // 3. 初始化材质
+    // 初始化材质
     if (!iconMaterial) {
       iconMaterial = new ShaderMaterial({
         uniforms: {
@@ -183,18 +202,17 @@ export function useIconMode() {
       }
     }
 
-    // 4. 初始化 Mesh
-    if (!iconMesh) {
-      iconMesh = new InstancedMesh(planeGeometry, iconMaterial, MAX_INSTANCES)
-      // 关闭视锥体剔除，避免因包围球未更新导致大场景下消失
+    if (!planeGeometry || !iconMaterial) return
+
+    if (!iconMesh || iconMesh.instanceMatrix.count < targetPool) {
+      detachIconMesh()
+      iconMesh = new InstancedMesh(planeGeometry, iconMaterial, targetPool)
       iconMesh.frustumCulled = false
-      // 确保 Raycaster 始终检测实例
       iconMesh.boundingSphere = new Sphere(new Vector3(0, 0, 0), Infinity)
       iconMesh.instanceMatrix.setUsage(DynamicDrawUsage)
       iconMesh.count = 0
+      iconInstancedMesh.value = markRaw(iconMesh)
     }
-
-    iconInstancedMesh.value = markRaw(iconMesh)
   }
 
   /**
@@ -202,12 +220,11 @@ export function useIconMode() {
    */
   async function rebuild() {
     const items = editorStore.activeScheme?.items.value ?? []
-    const instanceCount = Math.min(items.length, MAX_INSTANCES)
+    const instanceCount = requiredInstanceCount(items.length)
 
-    // 计算唯一图标数量并初始化资源
     const uniqueItemIdsSet = new Set(items.slice(0, instanceCount).map((item) => item.gameId))
-    const initialCapacity = Math.max(32, uniqueItemIdsSet.size + 16)
-    ensureIconResources(initialCapacity)
+    const textureLayerCapacity = Math.max(32, uniqueItemIdsSet.size + 16)
+    ensureIconResources(textureLayerCapacity, instanceCount)
 
     const currentIconMeshTarget = iconInstancedMesh.value
     if (!currentIconMeshTarget) return

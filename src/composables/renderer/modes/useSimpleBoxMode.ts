@@ -2,6 +2,7 @@ import { ref, markRaw } from 'vue'
 import { BoxGeometry, InstancedMesh, DynamicDrawUsage, Sphere, Vector3 } from 'three'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { nextInstancedPoolCapacity, requiredInstanceCount } from '@/lib/renderInstanceBudget'
 import { createBoxMaterial } from '../shared/materials'
 import {
   scratchMatrix,
@@ -12,7 +13,11 @@ import {
   scratchColor,
   scratchTmpVec3,
 } from '../shared/scratchObjects'
-import { MAX_RENDER_INSTANCES as MAX_INSTANCES } from '@/types/constants'
+
+function detachInstancedMesh(mesh: InstancedMesh) {
+  mesh.geometry = null as any
+  mesh.material = null as any
+}
 
 /**
  * Simple Box 渲染模式
@@ -36,21 +41,34 @@ export function useSimpleBoxMode() {
 
   const material = createBoxMaterial(0.95)
 
-  // 创建 InstancedMesh
-  const mesh = new InstancedMesh(baseGeometry, material, MAX_INSTANCES)
-  mesh.frustumCulled = false
-  mesh.boundingSphere = new Sphere(new Vector3(0, 0, 0), Infinity)
-  mesh.instanceMatrix.setUsage(DynamicDrawUsage)
-  mesh.count = 0
+  const simpleBoxInstancedMesh = ref<InstancedMesh | null>(null)
 
-  const simpleBoxInstancedMesh = ref<InstancedMesh | null>(markRaw(mesh))
+  function ensureMeshPool(requiredInstances: number) {
+    const current = simpleBoxInstancedMesh.value?.instanceMatrix.count ?? 0
+    const targetPool = nextInstancedPoolCapacity(requiredInstances, current)
+    if (simpleBoxInstancedMesh.value && current >= targetPool) return
+
+    if (simpleBoxInstancedMesh.value) {
+      detachInstancedMesh(simpleBoxInstancedMesh.value)
+    }
+    const mesh = new InstancedMesh(baseGeometry, material, targetPool)
+    mesh.frustumCulled = false
+    mesh.boundingSphere = new Sphere(new Vector3(0, 0, 0), Infinity)
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage)
+    mesh.count = 0
+    simpleBoxInstancedMesh.value = markRaw(mesh)
+  }
 
   /**
    * 重建所有实例
    */
   function rebuild() {
     const items = editorStore.activeScheme?.items.value ?? []
-    const instanceCount = Math.min(items.length, MAX_INSTANCES)
+    const instanceCount = requiredInstanceCount(items.length)
+    ensureMeshPool(instanceCount)
+
+    const mesh = simpleBoxInstancedMesh.value
+    if (!mesh) return
 
     mesh.count = instanceCount
 
@@ -93,6 +111,9 @@ export function useSimpleBoxMode() {
    * 更新符号缩放（当 symbolScale 设置变化时调用）
    */
   function updateScale() {
+    const mesh = simpleBoxInstancedMesh.value
+    if (!mesh) return
+
     const scale = settingsStore.settings.threeSymbolScale
     const s = 100 * scale
     scratchScale.set(s, s, s)
@@ -116,8 +137,7 @@ export function useSimpleBoxMode() {
     baseGeometry.dispose()
     material.dispose()
     if (simpleBoxInstancedMesh.value) {
-      simpleBoxInstancedMesh.value.geometry = null as any
-      simpleBoxInstancedMesh.value.material = null as any
+      detachInstancedMesh(simpleBoxInstancedMesh.value)
       simpleBoxInstancedMesh.value = null
     }
   }

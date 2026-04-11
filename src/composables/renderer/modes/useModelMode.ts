@@ -22,7 +22,11 @@ import {
   scratchScale,
   scratchColor,
 } from '../shared/scratchObjects'
-import { MAX_RENDER_INSTANCES as MAX_INSTANCES } from '@/types/constants'
+import {
+  MAX_RENDER_INSTANCES,
+  nextInstancedPoolCapacity,
+  requiredInstanceCount,
+} from '@/lib/renderInstanceBudget'
 import type { ModelAssetProfile } from '@/types/furniture'
 
 // 当缺少尺寸信息时使用的默认尺寸（游戏坐标：X=长, Y=宽, Z=高）
@@ -106,17 +110,38 @@ export function useModelMode() {
     activeAssetProfile = profile
   }
 
-  /**
-   * 确保回退渲染资源已初始化
-   */
-  function ensureFallbackResources() {
-    if (fallbackMesh.value) return
+  function disposeFallbackMeshOnly() {
+    const m = fallbackMesh.value
+    if (!m) return
+    const mat = m.material
+    m.geometry = null as any
+    m.material = null as any
+    if (Array.isArray(mat)) {
+      for (const x of mat) x.dispose()
+    } else {
+      mat.dispose()
+    }
+    fallbackMesh.value = null
+  }
 
-    fallbackGeometry.value = new BoxGeometry(1, 1, 1)
-    fallbackGeometry.value.translate(0, 0, 0.5)
+  /**
+   * 确保回退用 InstancedMesh 池至少容纳 requiredInstances（受用户硬顶限制）
+   */
+  function ensureFallbackResources(requiredInstances: number) {
+    const current = fallbackMesh.value?.instanceMatrix.count ?? 0
+    const targetPool = nextInstancedPoolCapacity(requiredInstances, current)
+    if (fallbackMesh.value && current >= targetPool) return
+
+    disposeFallbackMeshOnly()
+
+    if (!fallbackGeometry.value) {
+      const geom = new BoxGeometry(1, 1, 1)
+      geom.translate(0, 0, 0.5)
+      fallbackGeometry.value = geom
+    }
     const fallbackMaterial = createBoxMaterial(0.9)
     fallbackMesh.value = markRaw(
-      new InstancedMesh(fallbackGeometry.value, fallbackMaterial, MAX_INSTANCES)
+      new InstancedMesh(fallbackGeometry.value, fallbackMaterial, targetPool)
     )
     fallbackMesh.value.instanceMatrix.setUsage(DynamicDrawUsage)
     fallbackMesh.value.count = 0
@@ -132,7 +157,8 @@ export function useModelMode() {
     syncAssetProfile(assetProfile)
     const modelManager = getThreeModelManager()
     const items = currentScheme?.items.value ?? []
-    const instanceCount = Math.min(items.length, MAX_INSTANCES)
+    const instanceCount = requiredInstanceCount(items.length)
+    const renderCap = MAX_RENDER_INSTANCES
     // isStale=true 表示这次构建结果不该再提交（例如用户切方案了）
     const isStale = () =>
       options?.isStale?.() === true ||
@@ -144,12 +170,15 @@ export function useModelMode() {
       return false
     }
 
-    if (items.length > MAX_INSTANCES) {
+    if (items.length > renderCap) {
       console.warn(
-        `[ModelMode] 当前可见物品数量 (${items.length}) 超过上限 ${MAX_INSTANCES}，仅渲染前 ${MAX_INSTANCES} 个`
+        `[ModelMode] 当前可见物品数量 (${items.length}) 超过渲染硬顶 ${renderCap}，仅渲染前 ${renderCap} 个`
       )
     }
+
     if (isStale()) return false
+
+    ensureFallbackResources(instanceCount)
 
     // 1) 先把物品按“同 gameId + 同染色方案”分组
     // 这样每组可以共用一个 InstancedMesh，减少 draw call
@@ -292,7 +321,6 @@ export function useModelMode() {
     // - 无配置：静态 fallback
     // - createInstancedMesh 失败：动态 fallback
     const appendFallbackItem = (item: AppItem) => {
-      ensureFallbackResources()
       if (!fallbackMesh.value) return
 
       const mesh = fallbackMesh.value

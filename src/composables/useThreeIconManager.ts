@@ -21,7 +21,7 @@ export function useThreeIconManager() {
   const ICON_SIZE = 256 // 统一图标尺寸
   const INITIAL_CAPACITY = 32 // 初始容量（层数）
   const BLOCK_SIZE = 32 // 扩容步长（块大小）
-  const MAX_CAPACITY = 1024 // 最大容量限制
+  const MAX_CAPACITY = 2048 // 最大容量限制
 
   // 纹理数组（3D 纹理）
   let textureArray: Data3DTexture | null = null

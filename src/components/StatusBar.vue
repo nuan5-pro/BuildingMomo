@@ -24,9 +24,10 @@ import {
   Cloud,
   CloudAlert,
 } from 'lucide-vue-next'
-import { MAX_RENDER_INSTANCES } from '@/types/constants'
+import { MAX_RENDER_INSTANCES } from '@/lib/renderInstanceBudget'
 import SchemeSettingsDialog from './SchemeSettingsDialog.vue'
 
+const settingsStore = useSettingsStore()
 const editorStore = useEditorStore()
 const validationStore = useValidationStore()
 const { hasDuplicate, duplicateItemCount, limitIssues } = storeToRefs(validationStore)
@@ -40,7 +41,6 @@ const {
 } = validationStore
 const uiStore = useUIStore()
 const commandStore = useCommandStore()
-const settingsStore = useSettingsStore()
 const cloudSchemeStore = useCloudSchemeStore()
 const notification = useNotification()
 const { reconnectActiveCloudScheme, getStoredDisplayName } = useCloudSchemeSync()

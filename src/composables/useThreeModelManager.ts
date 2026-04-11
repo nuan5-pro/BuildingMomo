@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { MAX_RENDER_INSTANCES } from '@/types/constants'
+import { MAX_RENDER_INSTANCES } from '@/lib/renderInstanceBudget'
 import type { ModelDyePlan } from '@/lib/modelDye'
 import type { ModelAssetProfile } from '@/types/furniture'
 import {
@@ -246,9 +246,9 @@ export function useThreeModelManager(profile: ModelAssetProfile): ThreeModelMana
         return existing
       }
 
-      console.log(
-        `[ModelManager] 容量不足 ${cacheKey}: 需 ${instanceCount}, 当前 ${existing.instanceMatrix.count} → 重建`
-      )
+      // console.log(
+      //   `[ModelManager] 容量不足 ${cacheKey}: 需 ${instanceCount}, 当前 ${existing.instanceMatrix.count} → 重建`
+      // )
       // 内部重建时不 evict coloredMaterial：如果 dyePlan 没变，后续会从 coloredMaterialCache 复用
       disposeMesh(cacheKey)
     }
@@ -276,7 +276,7 @@ export function useThreeModelManager(profile: ModelAssetProfile): ThreeModelMana
       material = coloredMat
     }
 
-    // 容量分配：缓冲 +16，预留 *1.5，最小 32，上限 MAX_RENDER_INSTANCES
+    // 容量分配：缓冲 +16，预留 *1.5，最小 32，上限为代码内渲染硬顶
     const allocatedCapacity = Math.min(
       Math.max(instanceCount + 16, Math.floor(instanceCount * 1.5), 32),
       MAX_RENDER_INSTANCES

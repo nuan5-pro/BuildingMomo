@@ -212,7 +212,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 - Provides a **unified interaction adapter** (`interactionAdapter`) used by selection and tooltips:
   - `pick(raycaster)` / `pickAsync(raycaster)` return the closest instance hit along with its internal ID.
   - `forEachRegionCandidate(visitor)` enumerates the currently rendered instances so region selection can test projected center points consistently across `box`, `icon`, `simple-box`, and `model` modes.
-- Performance constants defined in `src/types/constants.ts`: `MAX_RENDER_INSTANCES` (40000), `RAYCAST_SKIP_ITEM_THRESHOLD` (10000).
+- Performance constants: `MAX_RENDER_INSTANCES` (fixed render cap in `src/lib/renderInstanceBudget.ts`, default 500000; re-exported from `src/types/constants.ts`), `RAYCAST_SKIP_ITEM_THRESHOLD` (10000, in `src/types/constants.ts`).
 
 ### Editor manipulation & coordinate systems
 
@@ -526,7 +526,7 @@ The `lib` directory contains reusable mathematical and geometric utilities that 
 - `furniture.ts` – Furniture metadata: `FurnitureItem`, `FurnitureModelConfig`, `FurnitureMeshConfig`, `FurnitureColorConfig`, `FurnitureDB`
 - `persistence.ts` – Workspace persistence: `WorkspaceSnapshot`, `HomeSchemeSnapshot`, `ValidationResult`
 - `tab.ts` – Tab types: `Tab`, `TabType`
-- `constants.ts` – Render constants: `MAX_RENDER_INSTANCES`, `RAYCAST_SKIP_ITEM_THRESHOLD`
+- `constants.ts` – Re-exports `MAX_RENDER_INSTANCES` (defined in `renderInstanceBudget.ts`) and `RAYCAST_SKIP_ITEM_THRESHOLD`
 
 ## Notes for future changes
 
