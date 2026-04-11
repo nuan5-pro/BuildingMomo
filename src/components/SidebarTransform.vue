@@ -33,7 +33,25 @@ const isPositionRelative = ref(false)
 const isScaleRelative = ref(false)
 
 // 范围模式：pivot（轴点范围）或 bbox（包围盒范围）
-const rangeMode = ref<'pivot' | 'bbox'>('pivot')
+// box/model 显示模式下默认使用包围盒范围
+function isVolumeDisplayMode(mode: 'box' | 'icon' | 'simple-box' | 'model') {
+  return mode === 'box' || mode === 'model'
+}
+
+const rangeMode = ref<'pivot' | 'bbox'>(
+  isVolumeDisplayMode(settingsStore.settings.threeDisplayMode) ? 'bbox' : 'pivot'
+)
+
+watch(
+  () => settingsStore.settings.threeDisplayMode,
+  (mode, prev) => {
+    if (!isVolumeDisplayMode(mode)) return
+    if (prev === undefined || !isVolumeDisplayMode(prev)) {
+      rangeMode.value = 'bbox'
+    }
+  },
+  { immediate: true }
+)
 
 // 定点旋转状态（提升到父组件，防止子组件卸载时丢失）
 const customPivotEnabled = ref(false)
