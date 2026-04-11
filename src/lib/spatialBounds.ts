@@ -2,6 +2,7 @@ import { Box3, Vector3 } from 'three'
 import { getThreeModelManager, type ThreeModelManager } from '@/composables/useThreeModelManager'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { SCENE_BOUNDS_ORIGIN_ONLY_THRESHOLD } from '@/types/constants'
 import type { AppItem } from '@/types/editor'
 import { getAABBFromMatrix, getAABBFromMatrixAndModelBox } from './collision'
 import { buildDisplayWorldMatrixFromItem } from './scaleRenderCompensation'
@@ -92,6 +93,55 @@ function getItemWorldBoxWithContext(item: AppItem, context: WorldBoundsContext):
 }
 
 /**
+ * 获取“仅按物品原点”合并后的世界空间包围盒。
+ *
+ * 这是给超大场景用的降级路径：
+ * - 不再计算每个物品的真实显示几何 AABB
+ * - 只取每个物品原点在世界空间中的位置
+ * - 最终得到一个“原点云”的最小包围盒
+ *
+ * 设计目的：
+ * - scene / selection bounds 在本项目里主要服务于相机构图（far / fit / center）
+ * - 当物品数量超过阈值时，精确 AABB 的计算成本会远高于它带来的构图收益
+ * - 因此这里允许用“粗略但稳定”的 bounds 替代，以换取大场景交互性能
+ *
+ * 注意：
+ * - 返回的是世界空间 Box3，因此数据空间 Y 需要翻转成世界空间的 `-item.y`
+ * - 该结果会低估真实场景尺寸（因为忽略了物品自身大小），但这是有意接受的取舍
+ */
+function getItemsOriginWorldBox(items: AppItem[]): Box3 | null {
+  if (items.length === 0) return null
+
+  const first = items[0]
+  if (!first) return null
+
+  let minX = first.x
+  let maxX = first.x
+  let minY = -first.y
+  let maxY = -first.y
+  let minZ = first.z
+  let maxZ = first.z
+
+  for (let index = 1; index < items.length; index++) {
+    const item = items[index]
+    if (!item) continue
+
+    const worldX = item.x
+    const worldY = -item.y
+    const worldZ = item.z
+
+    if (worldX < minX) minX = worldX
+    if (worldX > maxX) maxX = worldX
+    if (worldY < minY) minY = worldY
+    if (worldY > maxY) maxY = worldY
+    if (worldZ < minZ) minZ = worldZ
+    if (worldZ > maxZ) maxZ = worldZ
+  }
+
+  return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ))
+}
+
+/**
  * 获取单个物品的世界空间 AABB。
  *
  * 适合一次性调用；若需要批量计算多个 item，优先使用 `getItemsWorldBox()`，
@@ -109,6 +159,12 @@ export function getItemWorldBox(item: AppItem): Box3 {
  */
 export function getItemsWorldBox(items: AppItem[]): Box3 | null {
   if (items.length === 0) return null
+
+  // 超大场景下退化为“原点包围盒”策略，避免为相机构图重复扫描所有物品的真实显示几何。
+  // 这里的目标不是物理精确，而是以足够低的成本得到一个稳定可用的 framing 参考盒。
+  if (items.length > SCENE_BOUNDS_ORIGIN_ONLY_THRESHOLD) {
+    return getItemsOriginWorldBox(items)
+  }
 
   const context = createWorldBoundsContext()
   let mergedBox: Box3 | null = null

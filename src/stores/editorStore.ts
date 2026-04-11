@@ -142,9 +142,14 @@ export const useEditorStore = defineStore('editor', () => {
     return map
   })
 
-  // 场景版本号，用于通知外部监听者（如 ValidationStore）场景内容发生了变更
-  // 即使是原地修改 (In-Place Mutation) 也会触发此版本号更新
-  const sceneVersion = ref(0)
+  // 内容更新版本号按“结构 / 变换”拆分：
+  // - structureVersion：新增/删除/分组/染色等会改变实例结构的更新
+  // - transformVersion：仅位置/旋转/缩放变化，可走增量矩阵更新
+  // sceneVersion 保留为聚合视图，供不关心细分原因的订阅者使用
+  const structureVersion = ref(0)
+  const transformVersion = ref(0)
+  const lastTransformedItemIds = shallowRef<string[]>([])
+  const sceneVersion = computed(() => structureVersion.value + transformVersion.value)
   // 选择状态版本号，用于低开销监听选中变化
   const selectionVersion = ref(0)
   // 历史栈版本号：undo/redo 会原地修改 history.value，用此版本号驱动撤销/重做按钮的 enabled 更新
@@ -153,11 +158,24 @@ export const useEditorStore = defineStore('editor', () => {
   const pendingTransactions = shallowRef<EditorTransaction[]>([])
 
   // 手动触发更新的方法
-  function triggerSceneUpdate() {
+  function triggerStructureUpdate() {
     if (activeScheme.value) {
       triggerRef(activeScheme.value.items)
-      sceneVersion.value++
+      lastTransformedItemIds.value = []
+      structureVersion.value++
     }
+  }
+
+  function triggerTransformUpdate(itemIds?: Iterable<string>) {
+    if (activeScheme.value) {
+      triggerRef(activeScheme.value.items)
+      lastTransformedItemIds.value = itemIds ? Array.from(new Set(itemIds)) : []
+      transformVersion.value++
+    }
+  }
+
+  function triggerSceneUpdate() {
+    triggerStructureUpdate()
   }
 
   function triggerSelectionUpdate() {
@@ -533,7 +551,8 @@ export const useEditorStore = defineStore('editor', () => {
     triggerRef(scheme.items)
     triggerRef(scheme.selectedItemIds)
     triggerRef(scheme.groupOrigins)
-    sceneVersion.value++
+    lastTransformedItemIds.value = []
+    structureVersion.value++
     selectionVersion.value++
     historyVersion.value++
     return true
@@ -829,10 +848,15 @@ export const useEditorStore = defineStore('editor', () => {
 
     // 手动触发更新 (Crucial for ShallowRef pattern)
     sceneVersion,
+    structureVersion,
+    transformVersion,
+    lastTransformedItemIds,
     selectionVersion,
     historyVersion,
     transactionVersion,
     pendingTransactions,
+    triggerStructureUpdate,
+    triggerTransformUpdate,
     triggerSceneUpdate,
     triggerSelectionUpdate,
     triggerHistoryUpdate,

@@ -7,7 +7,7 @@ import { useLoadingStore } from '@/stores/loadingStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getThreeModelManager, disposeThreeModelManager } from '@/composables/useThreeModelManager'
 import { createTimeSlicer } from '@/lib/cooperativeTask'
-import { type ModelDyePlan, resolveModelDyePlan, buildModelMeshKey } from '@/lib/modelDye'
+import { type ModelDyePlan, resolveCachedModelDyeMeta } from '@/lib/modelDye'
 import {
   applyScaleRenderCompensationToPositionInPlace,
   resolveDisplayGeometryInfo,
@@ -196,11 +196,11 @@ export function useModelMode() {
 
       let key: string
       if (hasValidConfig) {
-        const dyePlan = resolveModelDyePlan({
+        const { dyePlan, meshKey } = resolveCachedModelDyeMeta({
           item,
           colorsConfig: config.colors,
         })
-        key = buildModelMeshKey(item.gameId, dyePlan)
+        key = meshKey
         if (!groupMeta.has(key)) {
           groupMeta.set(key, { gameId: item.gameId, dyePlan })
         }
