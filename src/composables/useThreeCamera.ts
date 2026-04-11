@@ -21,7 +21,10 @@ import {
   getForwardVector,
   getRightVector,
   calculateYawPitchFromDirection,
-  ORTHO_BASE_FRUSTUM_HEIGHT,
+  computeOrthographicFramingZoom,
+  EMPTY_SCHEME_PERSPECTIVE_DISTANCE,
+  EMPTY_SCHEME_SYNTHETIC_MAX_DIM,
+  EMPTY_SCHEME_TOP_CAMERA_DISTANCE,
   scaleVec3,
   addScaled,
   normalize,
@@ -61,7 +64,6 @@ export interface CameraControllerOptions {
   shiftSpeedMultiplier?: number | Ref<number>
   mouseSensitivity?: number | Ref<number>
   pitchLimits?: { min: number; max: number } | Ref<{ min: number; max: number }>
-  minHeight?: number | Ref<number>
 }
 
 // 依赖项
@@ -132,7 +134,6 @@ export function useThreeCamera(
   )
   const pitchMinRad = computed(() => (pitchLimits.value.min * Math.PI) / 180)
   const pitchMaxRad = computed(() => (pitchLimits.value.max * Math.PI) / 180)
-  const minHeight = computed(() => toValue(optionsValue.value.minHeight) ?? -10000)
   const FOV = computed(() => settingsStore.settings.cameraFov)
 
   // ============================================================
@@ -222,6 +223,31 @@ export function useThreeCamera(
 
   // === 响应式绑定 (Reactive Binding with Store) ===
 
+  /**
+   * 无物品新方案：固定顶视 + 固定距离/zoom，便于对着地图摆放；不随底图异步加载再改机位（用户手动挪后也不自动纠）。
+   */
+  function applyEmptySchemeDefaultTopView() {
+    const target: Vec3 = [...sceneCenter.value]
+    state.value.target = target
+
+    const { position, up, yaw, pitch } = computeViewPose(
+      'top',
+      target,
+      EMPTY_SCHEME_TOP_CAMERA_DISTANCE,
+      uiStore.workingCoordinateSystem,
+      { min: pitchMinRad.value, max: pitchMaxRad.value }
+    )
+    state.value.position = position
+    state.value.up = up
+    state.value.yaw = yaw
+    state.value.pitch = pitch
+    state.value.zoom = computeOrthographicFramingZoom(EMPTY_SCHEME_SYNTHETIC_MAX_DIM)
+
+    uiStore.setCurrentViewPreset('top')
+    controlMode.value = 'orbit'
+    markOrbitRuntimeWriteNeeded()
+  }
+
   // 1. Sync Store (Scheme Switch) -> Internal State
   watch(
     () => editorStore.activeSchemeId,
@@ -237,11 +263,14 @@ export function useThreeCamera(
         // 恢复状态
         restoreSnapshot(scheme.viewState.value)
       } else {
-        // 无状态（如新导入），默认使用顶视图并聚焦到物品中心
-        // 先设置正确的 target，再切换视图（确保 position 基于正确的 target 计算）
         state.value.target = [...sceneCenter.value]
-        state.value.zoom = 1
-        switchToViewPreset('top')
+        if (scheme && scheme.items.value.length === 0) {
+          applyEmptySchemeDefaultTopView()
+        } else {
+          // 无状态（如新导入有物品），默认顶视；经 switchToViewPreset 做透视↔正交换算
+          state.value.zoom = 1
+          switchToViewPreset('top')
+        }
       }
     },
     { immediate: true }
@@ -474,11 +503,6 @@ export function useThreeCamera(
       state.value.position[2] + deltaVec[2],
     ]
 
-    // 高度限制 (Z axis)
-    if (newPos[2] < minHeight.value) {
-      newPos[2] = minHeight.value
-    }
-
     state.value.position = newPos
     updateLookAtFromYawPitch()
   }
@@ -637,11 +661,6 @@ export function useThreeCamera(
       state.value.position[1] + forward[1] * distance,
       state.value.position[2] + forward[2] * distance,
     ]
-
-    // 高度限制 (Z axis)
-    if (newPos[2] < minHeight.value) {
-      newPos[2] = minHeight.value
-    }
 
     state.value.position = newPos
     updateLookAtFromYawPitch()
@@ -831,15 +850,6 @@ export function useThreeCamera(
             state.value.position[2] + deltaVec[2],
           ]
 
-          // 高度限制 (Z axis)
-          if (newPos[2] < minHeight.value) {
-            // 如果被限制了，只调整 Z 分量
-            const zDiff = minHeight.value - newPos[2]
-            newPos[2] = minHeight.value
-            // deltaVec 的 Z 分量也需要相应调整，以保证 target 同步
-            deltaVec[2] += zDiff
-          }
-
           state.value.position = newPos
           state.value.target = [
             state.value.target[0] + deltaVec[0],
@@ -904,8 +914,23 @@ export function useThreeCamera(
     // 2. 确定目标参数（不依赖当前状态，确保重置行为一致）
     const preset = currentViewPreset.value
     const targetCenter = sceneCenter.value
-    const distance = cameraDistance.value
-    const zoom = 1
+    const empty = (editorStore.activeScheme?.items.value.length ?? 0) === 0
+
+    let distance = cameraDistance.value
+    let zoom =
+      preset === 'perspective'
+        ? 1
+        : computeOrthographicFramingZoom(sceneFrameMetrics.value?.maxDim ?? 1000)
+
+    if (empty) {
+      if (preset === 'perspective') {
+        distance = EMPTY_SCHEME_PERSPECTIVE_DISTANCE
+        zoom = 1
+      } else {
+        distance = EMPTY_SCHEME_TOP_CAMERA_DISTANCE
+        zoom = computeOrthographicFramingZoom(EMPTY_SCHEME_SYNTHETIC_MAX_DIM)
+      }
+    }
 
     // 3. 直接使用 computeViewPose 计算相机姿态（纯函数，不依赖当前状态）
     //    绕过 switchToViewPreset 的 computeZoomConversion 复杂转换逻辑
@@ -1002,17 +1027,8 @@ export function useThreeCamera(
 
       setPoseFromLookAt(newPos, target)
 
-      // 2. 调整 Zoom 适配包围盒
-      // 正交聚焦使用固定视锥体高度，避免结果受场景大小影响
-      const frustumHeight = ORTHO_BASE_FRUSTUM_HEIGHT
-
-      // 计算目标需要的视口大小
-      const requiredSize = Math.max(maxDim, 1000) * 1.2
-
-      // zoom = 基准高度 / 实际需要高度
-      // 限制 zoom 范围防止出错
-      const newZoom = clamp(frustumHeight / requiredSize, 0.1, 20)
-      state.value.zoom = newZoom
+      // 2. 调整 Zoom 适配包围盒（与 fitCameraToScene 正交分支共用公式，允许极小 zoom 以适配大地图）
+      state.value.zoom = computeOrthographicFramingZoom(maxDim)
     } else {
       // === 透视视图处理 ===
       // 移动相机距离以包含包围盒

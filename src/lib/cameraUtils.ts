@@ -9,6 +9,39 @@ type Vec3 = [number, number, number]
 
 export const ORTHO_BASE_FRUSTUM_HEIGHT = 3000
 
+/** 正交「按包围盒适配」时的 zoom 上限 */
+export const ORTHO_FRAMING_ZOOM_MAX = 20
+
+/**
+ * 正交「按包围盒适配」时的 zoom 下限（Three 中正交 zoom 越小视野越大）。
+ * 原先 clamp 下限 0.1 会在选区/场景跨度极大时无法继续拉远，观感像贴脸而非全局预览。
+ */
+export const ORTHO_FRAMING_ZOOM_MIN = 1e-5
+
+/**
+ * 由包围盒主导尺寸 maxDim 估算正交相机 zoom，供聚焦选区与重置视图共用。
+ */
+export function computeOrthographicFramingZoom(maxDim: number): number {
+  const requiredSize = Math.max(maxDim, 1000) * 1.2
+  return clamp(
+    ORTHO_BASE_FRUSTUM_HEIGHT / requiredSize,
+    ORTHO_FRAMING_ZOOM_MIN,
+    ORTHO_FRAMING_ZOOM_MAX
+  )
+}
+
+/** 无物品方案：顶视相机沿视线距目标的世界距离（Z-up 顶视沿 +Z）；仅影响正交顶视机位 */
+export const EMPTY_SCHEME_TOP_CAMERA_DISTANCE = 24_000
+
+/**
+ * 无物品方案：正交 zoom 换算用的合成场景尺度（越小则视野越「近」、地图上显示越大）。
+ * 与透视默认距离解耦，可单独调正交「远近感」。
+ */
+export const EMPTY_SCHEME_SYNTHETIC_MAX_DIM = 36_000
+
+/** 无物品方案：透视「重置视图」时相机到目标的距离 */
+export const EMPTY_SCHEME_PERSPECTIVE_DISTANCE = 52_000
+
 // 视图预设配置
 interface ViewPresetConfig {
   direction: Vec3 // 相机相对于目标的方向（单位向量）
@@ -219,8 +252,12 @@ export function computeZoomConversion(
     const tanHalfFov = Math.tan(((fov / 2) * Math.PI) / 180)
     const safeDist = Math.max(currentDistance, 100)
 
-    // zoom = frustumSize / (2 * dist * tan(fov/2))
-    const newZoom = clamp(frustumSize / (2 * safeDist * tanHalfFov), 0.1, 20)
+    // zoom = frustumSize / (2 * dist * tan(fov/2))，与 computeOrthographicFramingZoom 共用上下限，避免远透视切正交被 0.1 下限贴脸
+    const newZoom = clamp(
+      frustumSize / (2 * safeDist * tanHalfFov),
+      ORTHO_FRAMING_ZOOM_MIN,
+      ORTHO_FRAMING_ZOOM_MAX
+    )
 
     return {
       newDistance: baseDistance, // 正交视图拉远到基准距离

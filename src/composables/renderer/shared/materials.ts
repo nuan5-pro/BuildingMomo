@@ -15,6 +15,8 @@ export function createBoxMaterial(opacity: number): ShaderMaterial {
       uBorderWidth: { value: 0.6 }, // 物理边框宽度 (单位: 游戏世界单位)
     },
     vertexShader: `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
       varying vec2 vUv;
       varying vec3 vColor;
       varying vec3 vScale;
@@ -39,10 +41,13 @@ export function createBoxMaterial(opacity: number): ShaderMaterial {
 
         vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
       }
     `,
     fragmentShader: `
       precision highp float;
+
+      #include <logdepthbuf_pars_fragment>
       
       uniform float uOpacity;
       uniform float uBorderWidth;
@@ -100,6 +105,8 @@ export function createBoxMaterial(opacity: number): ShaderMaterial {
         vec3 finalColor = mix(vColor, borderColor, isBorder);
         
         gl_FragColor = vec4(finalColor, uOpacity);
+
+        #include <logdepthbuf_fragment>
       }
     `,
     transparent: true,

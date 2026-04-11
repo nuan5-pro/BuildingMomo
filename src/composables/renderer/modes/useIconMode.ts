@@ -87,6 +87,9 @@ export function useIconMode() {
           uDefaultColor: { value: new Color(0x94a3b8) }, // 默认颜色
         },
         vertexShader: `
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+
         // 自定义 attribute
         in float textureIndex;
         
@@ -109,10 +112,14 @@ export function useIconMode() {
           // 应用实例矩阵变换（instanceMatrix 由 Three.js 自动注入）
           vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mvPosition;
+          #include <logdepthbuf_vertex>
         }
       `,
         fragmentShader: `
         precision highp sampler3D;
+
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
         
         uniform sampler3D textureArray;  // 3D 纹理数组
         uniform float textureDepth;      // 纹理数组的深度（动态）
@@ -156,6 +163,8 @@ export function useIconMode() {
           if (fragColor.a < 0.5) {
             discard;
           }
+
+          #include <logdepthbuf_fragment>
         }
       `,
         transparent: false,

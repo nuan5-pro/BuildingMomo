@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, markRaw, onActivated, onDeactivated, onMounted, toRef, watch } from 'vue'
 import { TresCanvas } from '@tresjs/core'
-import { OrbitControls, TransformControls, Grid } from '@tresjs/cientos'
+import { OrbitControls, TransformControls } from '@tresjs/cientos'
 import { Object3D, Raycaster, Vector2, Vector3, type WebGLRenderer, type Camera } from 'three'
 import backgroundUrl from '@/assets/home.webp'
 import { useEditorStore } from '@/stores/editorStore'
@@ -21,8 +21,9 @@ import { useThreeEnvironment } from '@/composables/useThreeEnvironment'
 import { useThreePointerRouter } from '@/composables/useThreePointerRouter'
 import { useOrbitControlsInput } from '@/composables/useOrbitControlsInput'
 import { setSceneInvalidate, invalidateScene } from '@/composables/useSceneInvalidate'
-import { useNearbyObjectsCheck } from '@/composables/useNearbyObjectsCheck'
 import { ORTHO_BASE_FRUSTUM_HEIGHT } from '@/lib/cameraUtils'
+import { computeClipFarFromWorldBounds } from '@/lib/cameraClipRange'
+import { getItemsWorldBoundsMetrics } from '@/lib/spatialBounds'
 import {
   useMagicKeys,
   useElementSize,
@@ -31,6 +32,7 @@ import {
   watchOnce,
 } from '@vueuse/core'
 import ThreeEditorOverlays from './ThreeEditorOverlays.vue'
+import LogDepthGrid from '@/components/scene/LogDepthGrid.vue'
 import { recordRenderFrame } from '@/composables/useFpsMonitor'
 
 // 设置 Three.js 全局 Z 轴向上
@@ -227,7 +229,6 @@ const cameraOptions = computed(() => ({
   shiftSpeedMultiplier: settingsStore.settings.cameraShiftMultiplier,
   mouseSensitivity: settingsStore.settings.cameraMouseSensitivity,
   pitchLimits: { min: -89, max: 89 },
-  minHeight: -10000,
 }))
 
 const {
@@ -276,20 +277,20 @@ watch(
   }
 )
 
-// ============================================================
-// 动态 near 平面：根据相机周边物体自动调整
-// ============================================================
+// 对数深度缓冲下 near 无需随场景切换；固定较小值便于贴近视口编辑
+const cameraNearPlane = 10
 
-// 使用时间切片检测相机周围是否有物体（避免阻塞主线程）
-const { hasNearbyObjects } = useNearbyObjectsCheck(cameraPosition, {
-  threshold: 1000,
-  throttleMs: 200,
+// 全场景合并 AABB → 动态远裁面（配合对数深度缓冲，避免大地图预览整屏被裁）
+const sceneWorldBoundsMetrics = computed(() => {
+  void editorStore.sceneVersion
+  const items = editorStore.activeScheme?.items.value ?? []
+  if (items.length === 0) return null
+  return getItemsWorldBoundsMetrics(items)
 })
 
-// 动态 near 平面：有近处物体时用 10，无近处物体时用 100
-const dynamicNear = computed(() => {
-  return hasNearbyObjects.value ? 10 : 100
-})
+const clipFar = computed(() =>
+  computeClipFarFromWorldBounds(cameraPosition.value, sceneWorldBoundsMetrics.value)
+)
 
 // 先初始化 renderer 获取 updateSelectedInstancesMatrix 和 interactionAdapter
 const {
@@ -752,6 +753,7 @@ onDeactivated(() => {
       <TresCanvas
         render-mode="on-demand"
         :clear-color="canvasClearColor"
+        logarithmic-depth-buffer
         power-preference="high-performance"
         @ready="handleTresReady"
         @render="handlePostRender"
@@ -765,8 +767,8 @@ onDeactivated(() => {
           :up="cameraUp"
           :zoom="cameraZoom"
           :fov="settingsStore.settings.cameraFov"
-          :near="dynamicNear"
-          :far="100000"
+          :near="cameraNearPlane"
+          :far="clipFar"
         />
 
         <!-- 正交相机 - 六个方向视图 -->
@@ -781,8 +783,8 @@ onDeactivated(() => {
           :right="orthoFrustum.right"
           :top="orthoFrustum.top"
           :bottom="orthoFrustum.bottom"
-          :near="dynamicNear"
-          :far="100000"
+          :near="cameraNearPlane"
+          :far="clipFar"
         />
 
         <!-- 轨道控制器：透视视图下使用中键旋转，正交视图下使用中键平移 -->
@@ -875,7 +877,7 @@ onDeactivated(() => {
         >
           <TresGroup :rotation="innerRotation">
             <!-- Grid 组件 -->
-            <Grid
+            <LogDepthGrid
               :args="[backgroundSize.width, backgroundSize.height]"
               :cell-size="1000"
               :section-size="1000"
