@@ -85,7 +85,7 @@ export function useEditorManipulation() {
       )
       activeScheme.value!.selectedItemIds.value.clear()
 
-      store.triggerStructureUpdate()
+      store.triggerSceneUpdate()
       store.triggerSelectionUpdate()
     })
   }
@@ -137,7 +137,7 @@ export function useEditorManipulation() {
         (item) => transformedMap.get(item.internalId) ?? item
       )
 
-      store.triggerTransformUpdate(ids)
+      store.triggerSceneUpdate()
     })
   }
 
@@ -159,7 +159,7 @@ export function useEditorManipulation() {
           ? { ...item, x: item.x + dx, y: item.y + dy, z: item.z + dz }
           : item
       )
-      store.triggerTransformUpdate(selected)
+      store.triggerSceneUpdate()
     }
 
     if (options.recordHistory) {
@@ -243,7 +243,7 @@ export function useEditorManipulation() {
         }
       })
 
-      store.triggerTransformUpdate(selectedIds)
+      store.triggerSceneUpdate()
     })
   }
 
@@ -465,7 +465,7 @@ export function useEditorManipulation() {
         return item
       })
 
-      store.triggerTransformUpdate(selectedIds)
+      store.triggerSceneUpdate()
     })
   }
 
@@ -519,7 +519,7 @@ export function useEditorManipulation() {
         }
       })
 
-      store.triggerTransformUpdate(selectedIds)
+      store.triggerSceneUpdate()
     })
   }
 
@@ -546,7 +546,7 @@ export function useEditorManipulation() {
           ? { ...item, x: update.x, y: update.y, z: update.z, rotation: update.rotation }
           : item
       })
-      store.triggerTransformUpdate(items.map((item) => item.id))
+      store.triggerSceneUpdate()
     }
 
     if (options.recordHistory) {

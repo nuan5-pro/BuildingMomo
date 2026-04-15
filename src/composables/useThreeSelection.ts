@@ -331,7 +331,7 @@ export function useThreeSelection(
           z: item.z + delta.z,
         }
       })
-      editorStore.triggerTransformUpdate(moveIds)
+      editorStore.triggerSceneUpdate()
     })
 
     uiStore.setSelectingQuickAlignTarget(false)

@@ -49,16 +49,6 @@ export function useEditorAlignment() {
   const { activeScheme } = storeToRefs(store)
   const { recordTransaction } = useEditorHistory()
 
-  function collectAlignUnitItemIds(alignUnits: AlignUnit[]): Set<string> {
-    const ids = new Set<string>()
-    for (const unit of alignUnits) {
-      for (const item of unit.items) {
-        ids.add(item.internalId)
-      }
-    }
-    return ids
-  }
-
   /**
    * 获取当前选区可用的组合原点上下文
    *
@@ -314,7 +304,7 @@ export function useEditorAlignment() {
       }
     })
 
-    store.triggerTransformUpdate(collectAlignUnitItemIds(alignUnits))
+    store.triggerSceneUpdate()
   }
 
   /**
@@ -436,7 +426,7 @@ export function useEditorAlignment() {
       }
     })
 
-    store.triggerTransformUpdate(collectAlignUnitItemIds(alignUnits))
+    store.triggerSceneUpdate()
   }
 
   /**
@@ -510,7 +500,7 @@ export function useEditorAlignment() {
       }
     })
 
-    store.triggerTransformUpdate(collectAlignUnitItemIds(alignUnits))
+    store.triggerSceneUpdate()
   }
 
   /**
@@ -667,7 +657,7 @@ export function useEditorAlignment() {
       }
     })
 
-    store.triggerTransformUpdate(collectAlignUnitItemIds(alignUnits))
+    store.triggerSceneUpdate()
   }
 
   /**
@@ -757,7 +747,7 @@ export function useEditorAlignment() {
         }
       })
 
-      store.triggerTransformUpdate(collectAlignUnitItemIds(alignUnits))
+      store.triggerSceneUpdate()
     })
   }
 

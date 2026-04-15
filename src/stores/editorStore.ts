@@ -142,14 +142,9 @@ export const useEditorStore = defineStore('editor', () => {
     return map
   })
 
-  // 内容更新版本号按“结构 / 变换”拆分：
-  // - structureVersion：新增/删除/分组/染色等会改变实例结构的更新
-  // - transformVersion：仅位置/旋转/缩放变化，可走增量矩阵更新
-  // sceneVersion 保留为聚合视图，供不关心细分原因的订阅者使用
-  const structureVersion = ref(0)
-  const transformVersion = ref(0)
-  const lastTransformedItemIds = shallowRef<string[]>([])
-  const sceneVersion = computed(() => structureVersion.value + transformVersion.value)
+  // 场景内容版本号：任何已提交的物品变更都统一触发 full rebuild。
+  // 拖拽过程中的临时预览仍走实例矩阵直写，但提交后的持久状态只认 sceneVersion。
+  const sceneVersion = ref(0)
   // 选择状态版本号，用于低开销监听选中变化
   const selectionVersion = ref(0)
   // 历史栈版本号：undo/redo 会原地修改 history.value，用此版本号驱动撤销/重做按钮的 enabled 更新
@@ -158,24 +153,11 @@ export const useEditorStore = defineStore('editor', () => {
   const pendingTransactions = shallowRef<EditorTransaction[]>([])
 
   // 手动触发更新的方法
-  function triggerStructureUpdate() {
-    if (activeScheme.value) {
-      triggerRef(activeScheme.value.items)
-      lastTransformedItemIds.value = []
-      structureVersion.value++
-    }
-  }
-
-  function triggerTransformUpdate(itemIds?: Iterable<string>) {
-    if (activeScheme.value) {
-      triggerRef(activeScheme.value.items)
-      lastTransformedItemIds.value = itemIds ? Array.from(new Set(itemIds)) : []
-      transformVersion.value++
-    }
-  }
-
   function triggerSceneUpdate() {
-    triggerStructureUpdate()
+    if (activeScheme.value) {
+      triggerRef(activeScheme.value.items)
+      sceneVersion.value++
+    }
   }
 
   function triggerSelectionUpdate() {
@@ -551,8 +533,7 @@ export const useEditorStore = defineStore('editor', () => {
     triggerRef(scheme.items)
     triggerRef(scheme.selectedItemIds)
     triggerRef(scheme.groupOrigins)
-    lastTransformedItemIds.value = []
-    structureVersion.value++
+    sceneVersion.value++
     selectionVersion.value++
     historyVersion.value++
     return true
@@ -848,15 +829,10 @@ export const useEditorStore = defineStore('editor', () => {
 
     // 手动触发更新 (Crucial for ShallowRef pattern)
     sceneVersion,
-    structureVersion,
-    transformVersion,
-    lastTransformedItemIds,
     selectionVersion,
     historyVersion,
     transactionVersion,
     pendingTransactions,
-    triggerStructureUpdate,
-    triggerTransformUpdate,
     triggerSceneUpdate,
     triggerSelectionUpdate,
     triggerHistoryUpdate,

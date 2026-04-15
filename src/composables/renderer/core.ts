@@ -29,8 +29,6 @@ import type {
 import { initBVH } from './bvh'
 import { requiredInstanceCount } from '@/lib/renderInstanceBudget'
 import { invalidateScene } from '@/composables/useSceneInvalidate'
-import { buildDisplayWorldMatrixFromItem } from '@/lib/scaleRenderCompensation'
-import { getThreeModelManager } from '../useThreeModelManager'
 import type { ScreenPoint } from '@/lib/interaction/screenGeometry'
 
 // 全局 BVH 初始化标志（确保只初始化一次）
@@ -448,51 +446,6 @@ export function useThreeInstancedRenderer(isTransformDragging?: Ref<boolean>) {
     )
   }
 
-  /**
-   * 为指定物品 ID 集合构建“显示用世界矩阵”映射。
-   *
-   * 这个函数服务于 transform 增量更新路径：
-   * - 结构未变时，不走全量 rebuild
-   * - 只把本次发生变换的物品重新计算 display matrix
-   * - 然后交给 `updateSelectedInstancesMatrix()` 精准写回对应实例槽位
-   *
-   * 为什么这里必须使用 display matrix，而不是 raw world matrix？
-   * - 因为静态重建阶段使用的也是显示语义矩阵
-   * - 它会叠加模型/家具尺寸、显示模式差异、scale render compensation 等视觉补偿
-   * - 若这里改成 raw matrix，拖拽提交后的最终画面会和静态重建结果不一致
-   *
-   * 注意：
-   * - 仅在 `model` 模式下才懒初始化 `modelManager`，避免非模型模式白白触发额外依赖
-   * - 返回值的 key 是 internalId，value 是可直接写入实例更新器的世界矩阵
-   */
-  function buildDisplayWorldMatrixMapForItemIds(itemIds: Iterable<string>): Map<string, Matrix4> {
-    const idToWorldMatrixMap = new Map<string, Matrix4>()
-    const currentMode = settingsStore.settings.threeDisplayMode
-    let modelManager: ReturnType<typeof getThreeModelManager> | null = null
-
-    for (const itemId of itemIds) {
-      const item = editorStore.itemsMap.get(itemId)
-      if (!item) continue
-
-      if (currentMode === 'model' && !modelManager) {
-        modelManager = getThreeModelManager()
-      }
-
-      const display = buildDisplayWorldMatrixFromItem(item, {
-        currentMode,
-        getFurnitureSize: (gameId) => gameDataStore.getFurnitureSize(gameId),
-        getModelConfig: (gameId) => gameDataStore.getFurnitureModelConfig(gameId),
-        getModelBoundingBox: modelManager
-          ? (gameId) => modelManager!.getModelBoundingBox(gameId)
-          : undefined,
-      })
-
-      idToWorldMatrixMap.set(itemId, display.worldMatrix)
-    }
-
-    return idToWorldMatrixMap
-  }
-
   // 当前活动的异步射线检测任务（用于取消）
   let activeRaycastTask: RaycastTask | null = null
   const geometryCenterCache = new WeakMap<object, Vector3>()
@@ -741,7 +694,7 @@ export function useThreeInstancedRenderer(isTransformDragging?: Ref<boolean>) {
   watch(
     [
       () => editorStore.activeSchemeId, // 切换方案时重建
-      () => editorStore.structureVersion, // 仅结构变化触发全量重建
+      () => editorStore.sceneVersion, // 任何已提交场景变更都触发全量重建
       () => gameDataStore.isInitialized, // 监听游戏数据加载状态（延迟加载支持）
     ],
     () => {
@@ -752,28 +705,6 @@ export function useThreeInstancedRenderer(isTransformDragging?: Ref<boolean>) {
       scheduleRebuild()
     },
     { deep: false, immediate: true }
-  )
-
-  watch(
-    () => editorStore.transformVersion,
-    () => {
-      if (isTransformDragging?.value) {
-        return
-      }
-
-      const changedIds = editorStore.lastTransformedItemIds
-      if (changedIds.length === 0) {
-        return
-      }
-
-      const idToWorldMatrixMap = buildDisplayWorldMatrixMapForItemIds(changedIds)
-      if (idToWorldMatrixMap.size === 0) {
-        return
-      }
-
-      updateSelectedInstancesMatrix(idToWorldMatrixMap)
-      invalidateScene()
-    }
   )
 
   // 监听显示模式变化，立即重建实例
