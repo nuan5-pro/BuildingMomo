@@ -286,6 +286,18 @@ export const useSettingsStore = defineStore('settings', () => {
     if (savedPassword) {
       await verifyPassword(savedPassword, false)
     }
+
+    // 安全模式下，只要当前未鉴权，就不允许停留在 model 模式
+    if (
+      import.meta.env.VITE_ENABLE_SECURE_MODE === 'true' &&
+      !isAuthenticated.value &&
+      settings.value.threeDisplayMode === 'model'
+    ) {
+      settings.value.threeDisplayMode = 'simple-box'
+      console.log(
+        '[SettingsStore] Unauthenticated in secure mode, downgrade threeDisplayMode from model to simple-box'
+      )
+    }
   }
 
   return {
