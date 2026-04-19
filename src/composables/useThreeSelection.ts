@@ -317,7 +317,11 @@ export function useThreeSelection(
     uiStore.setSelectingQuickAlignTarget(false)
   }
 
-  function replaceItemGameIdInPlace(item: AppItem, newGameId: number): AppItem {
+  function replaceItemGameIdInPlace(
+    item: AppItem,
+    newGameId: number,
+    newInstanceId: number
+  ): AppItem {
     const furniture = gameDataStore.getFurniture(newGameId)
     const newScale = { ...item.extra.Scale }
     if (furniture?.scaleRange) {
@@ -335,6 +339,7 @@ export function useThreeSelection(
     return {
       ...item,
       gameId: newGameId,
+      instanceId: newInstanceId,
       rotation: newRotation,
       extra: {
         ...item.extra,
@@ -378,10 +383,13 @@ export function useThreeSelection(
     const newGameId = target.gameId
 
     recordTransaction('replace.gameId', () => {
+      let currentMaxInstanceId = scheme.maxInstanceId.value
       scheme.items.value = scheme.items.value.map((item) => {
         if (!replaceIds.has(item.internalId)) return item
-        return replaceItemGameIdInPlace(item, newGameId)
+        currentMaxInstanceId++
+        return replaceItemGameIdInPlace(item, newGameId, currentMaxInstanceId)
       })
+      scheme.maxInstanceId.value = currentMaxInstanceId
       editorStore.triggerSceneUpdate()
     })
 
