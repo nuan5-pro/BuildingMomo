@@ -118,6 +118,24 @@
       系统会自动记录当前方案和未保存的修改，意外关闭后可恢复到之前状态。清理浏览器数据可能导致状态丢失。
     </p>
 
+    <h3>方案集</h3>
+    <p>
+      用于集中管理和归档多个家园方案。方案集的数据会直接存储到游戏安装目录的
+      <code>InfinityNikki\X6Game\BuildingMomo</code> 文件夹下。
+    </p>
+    <ul>
+      <li>
+        <strong>持久保存</strong
+        >：与标签页的工作台记忆不同，方案集独立于浏览器运行。即使清理浏览器缓存或更换浏览器，方案集的数据也<strong>不会丢失</strong>。
+      </li>
+    </ul>
+    <div class="doc-danger">
+      <strong>备份提醒：</strong><br />
+      由于数据存放在游戏目录下，<strong
+        >在卸载或重装游戏前，请务必手动备份 <code>BuildingMomo</code> 文件夹</strong
+      >，以免您的本地方案数据丢失。
+    </div>
+
     <h2>显示与性能</h2>
     <ul>
       <li><strong>简易方块 (推荐)</strong>：默认模式，性能最佳，适合大规模布局编辑。</li>

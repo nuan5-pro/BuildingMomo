@@ -141,6 +141,29 @@
       loss.
     </p>
 
+    <h3>Scheme Archive</h3>
+    <p>
+      Used to centrally manage and archive multiple home building schemes. Archive data is stored
+      directly in the <code>InfinityNikki\X6Game\BuildingMomo</code> folder within your game
+      installation directory.
+    </p>
+    <ul>
+      <li>
+        <strong>Persistent Storage</strong>: Unlike workspace memory in tabs, the archive operates
+        independently of the browser. Even if you clear browser cache or switch browsers, your
+        archive data <strong>will not be lost</strong>.
+      </li>
+    </ul>
+    <div class="doc-danger">
+      <strong>Backup Reminder:</strong><br />
+      Because the data is stored within the game directory,
+      <strong
+        >before uninstalling or reinstalling the game, please make sure to manually backup the
+        <code>BuildingMomo</code> folder</strong
+      >
+      to prevent accidental loss of your archived data.
+    </div>
+
     <h2>Display & Performance</h2>
     <ul>
       <li>
