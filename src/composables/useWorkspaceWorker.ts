@@ -16,6 +16,8 @@ const CURRENT_VERSION = 1
 
 const SESSION_MARKER_KEY = 'has_unsaved_session'
 
+type RestoreStatus = 'restored' | 'missing' | 'empty' | 'version-mismatch' | 'failed'
+
 export function useWorkspaceWorker() {
   const editorStore = useEditorStore()
   const tabStore = useTabStore()
@@ -26,9 +28,11 @@ export function useWorkspaceWorker() {
   const { buildableAreas, isBuildableAreaLoaded } = storeToRefs(gameDataStore)
 
   const isRestoring = ref(false)
+  const hasCheckedStoredWorkspace = ref(false)
+  const pendingStartMonitoring = ref(false)
 
   // 辅助：更新会话标记 (Local Storage)
-  // 用于 App 启动时快速判断是否需要恢复数据，避免不必要的 IndexedDB 等待
+  // 仅用于 App 启动时选择“是否等待恢复”的快路径，不能用它否定 IDB 中有快照。
   const updateSessionMarker = () => {
     const hasTabs = tabStore.tabs.length > 0
     if (hasTabs) {
@@ -182,7 +186,15 @@ export function useWorkspaceWorker() {
   async function startMonitoring() {
     if (isMonitoring.value) return
 
+    // worker 初始化会复制当前内存快照；必须等 IDB 恢复检查结束，
+    // 否则空工作台可能成为 worker 的权威状态并被写回。
+    if (!hasCheckedStoredWorkspace.value) {
+      pendingStartMonitoring.value = true
+      return
+    }
+
     isMonitoring.value = true
+    pendingStartMonitoring.value = false
 
     // 0. 确保 Worker 已初始化 (拥有数据副本)
     // 无论是否从存储恢复，Worker 都需要一份当前状态的副本才能工作
@@ -312,29 +324,56 @@ export function useWorkspaceWorker() {
     updateSessionMarker()
   }
 
-  async function restore() {
+  /**
+   * 从 IndexedDB 恢复工作台快照。
+   *
+   * 这里恢复的是“工作台记忆”：全部方案、标签页、选中状态、视图状态等，
+   * 不是游戏目录里的方案集，也不是文件监控历史。
+   *
+   * 这个函数还有一个启动期安全职责：恢复检查完成前不允许 worker 初始化。
+   * 否则空工作台可能先成为 worker 的权威状态，并覆盖仍可恢复的 IDB 快照。
+   */
+  async function restore(): Promise<RestoreStatus> {
     isRestoring.value = true
+    let status: RestoreStatus = 'missing'
+
     try {
+      // 按当前快照契约读取；若持久化数据结构异常，让后续访问或 hydrate 抛错，
+      // 统一进入 failed 分支，避免在恢复过程中吞掉真实错误。
       const snapshot = await get<WorkspaceSnapshot>(STORAGE_KEY)
 
-      if (snapshot) {
-        if (snapshot.version === CURRENT_VERSION) {
-          hydrate(snapshot)
-          console.log(
-            '[Persistence] Workspace restored, last updated:',
-            new Date(snapshot.updatedAt).toLocaleString()
-          )
-        } else {
-          console.warn('[Persistence] Version mismatch, skipping restore')
-        }
-      } else {
+      if (!snapshot) {
         console.log('[Persistence] No snapshot found')
+        status = 'missing'
+      } else if (snapshot.version !== CURRENT_VERSION) {
+        console.warn('[Persistence] Version mismatch, skipping restore')
+        status = 'version-mismatch'
+      } else if (snapshot.tab.tabs.length === 0 && snapshot.editor.schemes.length === 0) {
+        // 真正的空快照可以被后续状态覆盖；它不代表需要保护的旧工作台。
+        console.log('[Persistence] Empty snapshot found')
+        status = 'empty'
+      } else {
+        hydrate(snapshot)
+        console.log(
+          '[Persistence] Workspace restored, last updated:',
+          new Date(snapshot.updatedAt).toLocaleString()
+        )
+        status = 'restored'
       }
     } catch (error) {
       console.error('[Persistence] Failed to restore workspace:', error)
+      status = 'failed'
     } finally {
       isRestoring.value = false
+      hasCheckedStoredWorkspace.value = true
+      updateSessionMarker()
+
+      if (pendingStartMonitoring.value && isWorkerActive.value) {
+        void startMonitoring()
+      }
     }
+
+    return status
   }
 
   // 辅助：从当前状态构建完整快照 (用于初始化 Worker)

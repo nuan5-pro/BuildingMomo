@@ -136,33 +136,46 @@ onMounted(async () => {
     settingsStore.initializeAuth()
   }
 
-  // 快速检查：是否存在未保存的会话标记 (Local Storage 同步读取)
-  const hasUnsavedSession = localStorage.getItem('has_unsaved_session') === 'true'
-  const shouldRestore = settingsStore.settings.enableAutoSave && hasUnsavedSession
+  // 初始化游戏数据（异步加载）
+  void gameDataStore.initialize()
 
-  if (!shouldRestore) {
-    isAppReady.value = true
-  } else {
+  const startBackgroundServices = () => {
+    // 启动监控
+    if (isWorkerActive.value) {
+      startMonitoring()
+    }
+
+    // 启动时静默恢复文件监控（仅在已授权时生效，不会触发授权弹窗）
+    commandStore.fileOps.restoreWatchModeSilently().catch((error: unknown) => {
+      console.warn('[App] Silent watch mode restore failed:', error)
+    })
+  }
+
+  const restorePromise = restoreWorkspace()
+  const shouldWaitForRestore =
+    settingsStore.settings.enableAutoSave && localStorage.getItem('has_unsaved_session') === 'true'
+
+  if (shouldWaitForRestore) {
     try {
-      // 初始化游戏数据（异步加载）
-      gameDataStore.initialize()
-      await restoreWorkspace()
+      await restorePromise
     } catch (e) {
       console.error('[App] Restore failed:', e)
     } finally {
       isAppReady.value = true
+      startBackgroundServices()
     }
+  } else {
+    // marker 缺失只代表“不阻塞首屏”；后台仍会读取 IDB 作为工作台真相。
+    // 恢复检查完成前不会启动 worker，避免空内存覆盖旧快照。
+    isAppReady.value = true
+    restorePromise
+      .catch((e) => {
+        console.error('[App] Restore failed:', e)
+      })
+      .finally(() => {
+        startBackgroundServices()
+      })
   }
-
-  // 启动监控
-  if (isWorkerActive.value) {
-    startMonitoring()
-  }
-
-  // 启动时静默恢复文件监控（仅在已授权时生效，不会触发授权弹窗）
-  commandStore.fileOps.restoreWatchModeSilently().catch((error: unknown) => {
-    console.warn('[App] Silent watch mode restore failed:', error)
-  })
 })
 
 onUnmounted(() => {
