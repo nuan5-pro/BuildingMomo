@@ -13,6 +13,7 @@ import { useEditorGroups } from './editor/useEditorGroups'
 import { useEditorSelectionAction } from './useEditorSelectionAction'
 import { useEditorHistory } from './editor/useEditorHistory'
 import { useGameDataStore } from '@/stores/gameDataStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import type { AppItem } from '@/types/editor'
 import type { InteractionAdapter } from './renderer/types'
 
@@ -28,6 +29,7 @@ export function useThreeSelection(
   const editorStore = useEditorStore()
   const uiStore = useUIStore()
   const gameDataStore = useGameDataStore()
+  const settingsStore = useSettingsStore()
   const { recordTransaction } = useEditorHistory()
 
   const selectionRect = ref<SelectionRect | null>(null)
@@ -322,19 +324,21 @@ export function useThreeSelection(
     newGameId: number,
     newInstanceId: number
   ): AppItem {
-    const furniture = gameDataStore.getFurniture(newGameId)
     const newScale = { ...item.extra.Scale }
-    if (furniture?.scaleRange) {
-      const [min, max] = furniture.scaleRange
-      newScale.X = Math.max(min, Math.min(max, newScale.X))
-      newScale.Y = Math.max(min, Math.min(max, newScale.Y))
-      newScale.Z = Math.max(min, Math.min(max, newScale.Z))
-    }
     const newRotation = { ...item.rotation }
-    if (furniture?.rotationAllowed) {
-      if (!furniture.rotationAllowed.x) newRotation.x = 0
-      if (!furniture.rotationAllowed.y) newRotation.y = 0
-      if (!furniture.rotationAllowed.z) newRotation.z = 0
+    if (settingsStore.settings.enableLimitDetection) {
+      const furniture = gameDataStore.getFurniture(newGameId)
+      if (furniture?.scaleRange) {
+        const [min, max] = furniture.scaleRange
+        newScale.X = Math.max(min, Math.min(max, newScale.X))
+        newScale.Y = Math.max(min, Math.min(max, newScale.Y))
+        newScale.Z = Math.max(min, Math.min(max, newScale.Z))
+      }
+      if (furniture?.rotationAllowed) {
+        if (!furniture.rotationAllowed.x) newRotation.x = 0
+        if (!furniture.rotationAllowed.y) newRotation.y = 0
+        if (!furniture.rotationAllowed.z) newRotation.z = 0
+      }
     }
     return {
       ...item,
