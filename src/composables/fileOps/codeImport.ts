@@ -258,7 +258,52 @@ export function createCodeImportOps(params: CreateCodeImportOpsParams) {
     }
   }
 
+  async function importFromPublicSchemeCode(schemeCode: string): Promise<void> {
+    try {
+      ensureResourcesReady()
+
+      const apiUrl = `https://api-nikki.ranaxro.com/home-build-data?${encodeURIComponent(schemeCode)}`
+      const response = await fetch(apiUrl)
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          notification.error(t('fileOps.importCode.notFound'))
+        } else {
+          notification.error(t('fileOps.importCode.networkError', { reason: response.statusText }))
+        }
+        return
+      }
+
+      const jsonData = (await response.json()) as GameDataFile
+
+      if (!jsonData || !Object.prototype.hasOwnProperty.call(jsonData, 'PlaceInfo')) {
+        notification.error(t('fileOps.importCode.parseError'))
+        return
+      }
+
+      const result = await editorStore.importJSONAsScheme(
+        JSON.stringify(jsonData),
+        `Scheme_${schemeCode}`,
+        Date.now()
+      )
+
+      if (result.success) {
+        console.log(`[FileOps] Successfully imported public scheme code: ${schemeCode}`)
+        notification.success(t('fileOps.importCode.success'))
+        preloadActiveSchemeResources()
+      } else {
+        notification.error(t('fileOps.import.failed', { reason: result.error || 'Unknown error' }))
+      }
+    } catch (error: any) {
+      console.error('[FileOps] Failed to import public scheme code:', error)
+      notification.error(
+        t('fileOps.importCode.networkError', { reason: error.message || 'Unknown error' })
+      )
+    }
+  }
+
   return {
     importFromCode,
+    importFromPublicSchemeCode,
   }
 }

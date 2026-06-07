@@ -290,7 +290,7 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
     return restored
   }
 
-  const { importFromCode } = createCodeImportOps({
+  const { importFromCode, importFromPublicSchemeCode } = createCodeImportOps({
     editorStore,
     notification,
     t,
@@ -305,6 +305,7 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
   return {
     importJSON,
     importFromCode,
+    importFromPublicSchemeCode,
     exportJSON,
     saveToGame: watchOps.saveToGame,
     isFileSystemAccessSupported,

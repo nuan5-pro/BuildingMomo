@@ -127,10 +127,31 @@ function handleFullscreenChange() {
   }
 }
 
+function consumeStartupSchemeCode(): string | null {
+  const url = new URL(window.location.href)
+  const schemeCode = url.searchParams.get('schemeCode')?.trim()
+
+  if (!schemeCode) {
+    return null
+  }
+
+  url.searchParams.delete('schemeCode')
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+
+  return schemeCode
+}
+
+async function importStartupSchemeCode(schemeCode: string | null) {
+  if (!schemeCode) return
+
+  await commandStore.fileOps.importFromPublicSchemeCode(schemeCode)
+}
+
 // 初始化
 onMounted(async () => {
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   handleFullscreenChange()
+  const startupSchemeCode = consumeStartupSchemeCode()
 
   if (import.meta.env.VITE_ENABLE_SECURE_MODE === 'true') {
     settingsStore.initializeAuth()
@@ -161,6 +182,7 @@ onMounted(async () => {
     } catch (e) {
       console.error('[App] Restore failed:', e)
     } finally {
+      await importStartupSchemeCode(startupSchemeCode)
       isAppReady.value = true
       startBackgroundServices()
     }
@@ -172,6 +194,7 @@ onMounted(async () => {
       .catch((e) => {
         console.error('[App] Restore failed:', e)
       })
+      .then(() => importStartupSchemeCode(startupSchemeCode))
       .finally(() => {
         startBackgroundServices()
       })
