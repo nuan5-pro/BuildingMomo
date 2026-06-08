@@ -237,8 +237,8 @@ function fmtSize(v: number): string {
                   ▸ GLBs ({{ modelDebugInfo.meshPaths.length }})
                 </div>
                 <div
-                  v-for="meshPath in modelDebugInfo.meshPaths"
-                  :key="meshPath"
+                  v-for="(meshPath, meshPathIndex) in modelDebugInfo.meshPaths"
+                  :key="`${meshPath}-${meshPathIndex}`"
                   class="pl-2 text-[11px] break-all text-muted-foreground"
                 >
                   {{ meshPath }}
