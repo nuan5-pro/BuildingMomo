@@ -12,7 +12,9 @@ import {
   hasScaleRenderCompensation,
   resolveDisplayGeometryInfo,
 } from '@/lib/scaleRenderCompensation'
+import { getSlidePathWorldPoint, isSlidePathItem, withSlidePathWorldPoint } from '@/lib/slidePath'
 import { useEditorManipulation } from '@/composables/editor/useEditorManipulation'
+import { useEditorHistory } from '@/composables/editor/useEditorHistory'
 import type { AppItem } from '@/types/editor'
 import { createGizmoAppearanceManager } from '@/composables/transformGizmo/gizmoAppearance'
 import { createGizmoSnapEngine } from '@/composables/transformGizmo/gizmoSnapEngine'
@@ -21,6 +23,12 @@ import {
   type PatchedTransformControls,
 } from '@/composables/transformGizmo/gizmoTouchTranslate'
 import { getThreeModelManager } from '@/composables/useThreeModelManager'
+
+interface SlidePathGizmoBridge {
+  updateItemWorldMatrices: (idToWorldMatrixMap: Map<string, Matrix4>) => void
+  previewPoint: (itemId: string, pointIndex: number, worldPoint: Vector3) => void
+  clearPreview: () => void
+}
 
 export function useThreeTransformGizmo(
   pivotRef: Ref<Object3D | null>,
@@ -31,7 +39,8 @@ export function useThreeTransformGizmo(
   isTransformDragging: Ref<boolean>,
   orbitControlsRef?: Ref<any | null>,
   activeCameraRef?: Ref<any | null>,
-  transformRef?: Ref<any | null>
+  transformRef?: Ref<any | null>,
+  slidePathBridge?: SlidePathGizmoBridge
 ) {
   const gizmoStartMatrix = markRaw(new Matrix4())
   const itemStartWorldMatrices = ref(new Map<string, Matrix4>())
@@ -48,6 +57,15 @@ export function useThreeTransformGizmo(
   const altDragCopyPending = ref(false)
   const altDragCopyExecuted = ref(false)
   const gizmoStartPosition = markRaw(new Vector3())
+  // 拖拽开始时记录的节点世界坐标，用于判断是否有实际移动
+  const slidePathPointStartPosition = markRaw(new Vector3())
+  // mouseDown 时缓存当前编辑的节点信息，整个拖拽周期内复用，避免 mouseMove 高频查询
+  let cachedSlidePathPoint: {
+    item: AppItem
+    itemId: string
+    pointIndex: number
+    worldPoint: Vector3
+  } | null = null
 
   const scratchDeltaMatrix = markRaw(new Matrix4())
   const scratchInverseStartMatrix = markRaw(new Matrix4())
@@ -57,6 +75,7 @@ export function useThreeTransformGizmo(
   const gameDataStore = useGameDataStore()
   const settingsStore = useSettingsStore()
   const { commitBatchedTransform, getSelectedItemsCenter } = useEditorManipulation()
+  const { recordTransaction } = useEditorHistory()
   const { pasteItems, buildClipboardDataFromSelection } = useClipboard()
 
   const { Alt, Control, Meta } = useMagicKeys()
@@ -66,6 +85,9 @@ export function useThreeTransformGizmo(
   }
 
   function getEffectiveGizmoRotation(): { x: number; y: number; z: number } {
+    // 飞花道节点编辑强制使用 local 空间，不应用工作坐标系旋转
+    if (isSlidePathPointTransformActive()) return { x: 0, y: 0, z: 0 }
+
     const scheme = editorStore.activeScheme
     if (!scheme) return { x: 0, y: 0, z: 0 }
 
@@ -108,6 +130,7 @@ export function useThreeTransformGizmo(
     onPreviewMatrices: (newWorldMatrices) => {
       lastTranslateMatrices.value = newWorldMatrices
       updateSelectedInstancesMatrix(buildDisplayWorldMatricesMap(newWorldMatrices), true)
+      slidePathBridge?.updateItemWorldMatrices(newWorldMatrices)
     },
   })
 
@@ -117,6 +140,33 @@ export function useThreeTransformGizmo(
     settingsStore,
     uiStore
   )
+
+  function getActiveSlidePathPointTarget(): {
+    item: AppItem
+    itemId: string
+    pointIndex: number
+    worldPoint: Vector3
+  } | null {
+    const activePoint = uiStore.activeSlidePathPoint
+    if (!activePoint) return null
+
+    const item = editorStore.itemsMap.get(activePoint.itemId)
+    if (!isSlidePathItem(item)) return null
+
+    const worldPoint = getSlidePathWorldPoint(item, activePoint.pointIndex)
+    if (!worldPoint) return null
+
+    return {
+      item,
+      itemId: activePoint.itemId,
+      pointIndex: activePoint.pointIndex,
+      worldPoint,
+    }
+  }
+
+  function isSlidePathPointTransformActive(): boolean {
+    return cachedSlidePathPoint !== null || getActiveSlidePathPointTarget() !== null
+  }
 
   /**
    * 计算鼠标在旋转平面上的角度
@@ -199,14 +249,54 @@ export function useThreeTransformGizmo(
 
   const shouldShowGizmo = computed(
     () =>
-      (editorStore.activeScheme?.selectedItemIds.value.size ?? 0) > 0 &&
+      // 飞花道节点激活时也要显示 Gizmo，即使没有常规选中物品
+      (isSlidePathPointTransformActive() ||
+        (editorStore.activeScheme?.selectedItemIds.value.size ?? 0) > 0) &&
       editorStore.gizmoMode !== null
   )
 
   const transformSpace = computed<'local' | 'world'>(() => 'local')
 
+  // 选区变化或方案切换时，如果当前编辑的节点不再有效则自动清除
+  // 飞花道节点只支持 translate，切换到 rotate 时强制回退
+  watch(
+    [
+      () => uiStore.activeSlidePathPoint,
+      () => editorStore.selectionVersion,
+      () => editorStore.activeSchemeId,
+      () => editorStore.sceneVersion,
+    ],
+    () => {
+      const activePoint = uiStore.activeSlidePathPoint
+      if (!activePoint) return
+
+      const selectedIds = editorStore.activeScheme?.selectedItemIds.value
+      const isActiveItemSelected = selectedIds?.size === 1 && selectedIds.has(activePoint.itemId)
+
+      if (!isActiveItemSelected || !getActiveSlidePathPointTarget()) {
+        uiStore.setActiveSlidePathPoint(null)
+      } else if (editorStore.gizmoMode === 'rotate') {
+        editorStore.gizmoMode = 'translate'
+      }
+    },
+    { immediate: true }
+  )
+
+  // 非拖拽状态下，将 Gizmo pivot 定位到当前编辑的节点世界坐标
   watchEffect(() => {
     if (isTransformDragging.value) {
+      return
+    }
+
+    const activeSlidePathPoint = getActiveSlidePathPointTarget()
+    const pivot = pivotRef.value
+    if (activeSlidePathPoint && pivot) {
+      // 节点编辑只支持 translate，阻止切换到 rotate 模式
+      if (editorStore.gizmoMode === 'rotate') {
+        editorStore.gizmoMode = 'translate'
+      }
+      pivot.position.copy(activeSlidePathPoint.worldPoint)
+      pivot.quaternion.identity()
       return
     }
 
@@ -233,7 +323,6 @@ export function useThreeTransformGizmo(
       center = getSelectedItemsCenter()
     }
 
-    const pivot = pivotRef.value
     if (!center || !pivot) {
       return
     }
@@ -285,6 +374,22 @@ export function useThreeTransformGizmo(
 
     isTransformDragging.value = true
     hasStartedTransform.value = false
+
+    // 飞花道节点拖拽：只记录起始位置，不走常规物品的矩阵快照流程
+    cachedSlidePathPoint = getActiveSlidePathPointTarget()
+    if (cachedSlidePathPoint) {
+      altDragCopyPending.value = false
+      altDragCopyExecuted.value = false
+      isRotateMode.value = false
+      rotateAxis.value = null
+
+      pivot.updateMatrixWorld(true)
+      gizmoStartMatrix.copy(pivot.matrixWorld)
+      gizmoStartPosition.setFromMatrixPosition(pivot.matrixWorld)
+      slidePathPointStartPosition.copy(cachedSlidePathPoint.worldPoint)
+      setOrbitControlsEnabled(false)
+      return
+    }
 
     const scheme = editorStore.activeScheme
     if (Alt && Alt.value && scheme && scheme.selectedItemIds.value.size > 0) {
@@ -338,7 +443,9 @@ export function useThreeTransformGizmo(
     hasInitializedRotation.value = false
     lastRotationMatrices.value = null
     lastTranslateMatrices.value = null
+    cachedSlidePathPoint = null
 
+    slidePathBridge?.clearPreview()
     snapEngine.clearCollisionData()
     setOrbitControlsEnabled(true)
   }
@@ -427,6 +534,21 @@ export function useThreeTransformGizmo(
     const pivot = pivotRef.value
     if (!pivot) return
 
+    if (cachedSlidePathPoint) {
+      // 飞花道节点拖拽：直接从 pivot 位置取世界坐标，通知 renderer 实时预览
+      pivot.updateMatrixWorld(true)
+      const worldPoint = new Vector3().setFromMatrixPosition(pivot.matrixWorld)
+      if (worldPoint.distanceTo(slidePathPointStartPosition) > 0.001) {
+        hasStartedTransform.value = true
+      }
+      slidePathBridge?.previewPoint(
+        cachedSlidePathPoint.itemId,
+        cachedSlidePathPoint.pointIndex,
+        worldPoint
+      )
+      return
+    }
+
     if (isRotateMode.value && rotateAxis.value) {
       pivot.rotation.copy(startGizmoRotation)
     }
@@ -510,6 +632,7 @@ export function useThreeTransformGizmo(
 
           lastRotationMatrices.value = newWorldMatrices
           updateSelectedInstancesMatrix(buildDisplayWorldMatricesMap(newWorldMatrices), true)
+          slidePathBridge?.updateItemWorldMatrices(newWorldMatrices)
         }
       }
 
@@ -560,9 +683,57 @@ export function useThreeTransformGizmo(
     }
 
     updateSelectedInstancesMatrix(buildDisplayWorldMatricesMap(newWorldMatrices), true)
+    slidePathBridge?.updateItemWorldMatrices(newWorldMatrices)
   }
 
   function handleGizmoMouseUp() {
+    if (cachedSlidePathPoint) {
+      // 无实际移动则直接结束，不记录 transaction
+      if (!hasStartedTransform.value) {
+        endTransform()
+        return
+      }
+
+      const pivot = pivotRef.value
+      if (pivot) {
+        pivot.updateMatrixWorld(true)
+        const worldPoint = new Vector3().setFromMatrixPosition(pivot.matrixWorld)
+        slidePathBridge?.previewPoint(
+          cachedSlidePathPoint.itemId,
+          cachedSlidePathPoint.pointIndex,
+          worldPoint
+        )
+
+        const scheme = editorStore.activeScheme
+        if (scheme) {
+          // 将最终世界坐标写回游戏数据坐标，通过 transaction 支持 undo/redo
+          recordTransaction('slide_path.point.move', () => {
+            let changed = false
+            scheme.items.value = scheme.items.value.map((item) => {
+              if (item.internalId !== cachedSlidePathPoint!.itemId) return item
+
+              const nextItem = withSlidePathWorldPoint(
+                item,
+                cachedSlidePathPoint!.pointIndex,
+                worldPoint
+              )
+              if (!nextItem) return item
+
+              changed = true
+              return nextItem
+            })
+
+            if (changed) {
+              editorStore.triggerSceneUpdate()
+            }
+          })
+        }
+      }
+
+      endTransform()
+      return
+    }
+
     if (!hasStartedTransform.value) {
       endTransform()
       return
@@ -580,6 +751,7 @@ export function useThreeTransformGizmo(
     if (newWorldMatrices) {
       newWorldMatrices = snapEngine.applyCollisionSnap(newWorldMatrices)
       updateSelectedInstancesMatrix(buildDisplayWorldMatricesMap(newWorldMatrices), false)
+      slidePathBridge?.updateItemWorldMatrices(newWorldMatrices)
 
       const updates: any[] = []
       for (const [id, worldMatrix] of newWorldMatrices.entries()) {

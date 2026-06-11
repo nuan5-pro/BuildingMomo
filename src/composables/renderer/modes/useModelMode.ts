@@ -12,6 +12,7 @@ import {
   applyScaleRenderCompensationToPositionInPlace,
   resolveDisplayGeometryInfo,
 } from '@/lib/scaleRenderCompensation'
+import { resolveFurnitureSize } from '@/lib/slidePath'
 import { invalidateScene } from '@/composables/useSceneInvalidate'
 import { createBoxMaterial } from '../shared/materials'
 import {
@@ -333,7 +334,10 @@ export function useModelMode() {
 
       scratchPosition.set(item.x, item.y, item.z)
       const Scale = item.extra.Scale
-      const furnitureSize = gameDataStore.getFurnitureSize(item.gameId) ?? DEFAULT_FURNITURE_SIZE
+      const furnitureSize = resolveFurnitureSize(
+        item.gameId,
+        gameDataStore.getFurnitureSize(item.gameId) ?? DEFAULT_FURNITURE_SIZE
+      )
       const [sizeX, sizeY, sizeZ] = furnitureSize
 
       const Rotation = item.rotation
@@ -421,7 +425,11 @@ export function useModelMode() {
         itemsOfModel.length > 0
           ? resolveDisplayGeometryInfo(itemsOfModel[0]!, {
               currentMode: 'model',
-              getFurnitureSize: (gameId) => gameDataStore.getFurnitureSize(gameId),
+              getFurnitureSize: (gameId) =>
+                resolveFurnitureSize(
+                  gameId,
+                  gameDataStore.getFurnitureSize(gameId) ?? DEFAULT_FURNITURE_SIZE
+                ),
               getModelConfig: (gameId) => gameDataStore.getFurnitureModelConfig(gameId),
               getModelBoundingBox: (gameId) => modelManager.getModelBoundingBox(gameId),
             })

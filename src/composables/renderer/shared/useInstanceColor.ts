@@ -5,6 +5,13 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useEditorGroups } from '@/composables/editor/useEditorGroups'
 import { scratchColor } from './scratchObjects'
+import {
+  ALIGN_REFERENCE_ITEM_COLOR,
+  convertColorToHex,
+  DEFAULT_ITEM_COLOR,
+  HOVER_ITEM_COLOR,
+  SELECTED_ITEM_COLOR,
+} from './interactionColors'
 
 /**
  * 实例颜色管理
@@ -31,61 +38,30 @@ export function useInstanceColor() {
     return hoveredItemId.value === internalId
   }
 
-  /**
-   * 将 CSS 颜色字符串转换为十六进制数值
-   */
-  function convertColorToHex(colorStr: string | undefined): number {
-    if (!colorStr) return 0x94a3b8
-    const matches = colorStr.match(/\d+/g)
-    if (!matches || matches.length < 3) return 0x94a3b8
-    const r = parseInt(matches[0] ?? '148', 10)
-    const g = parseInt(matches[1] ?? '163', 10)
-    const b = parseInt(matches[2] ?? '184', 10)
-    return (r << 16) | (g << 8) | b
-  }
-
-  /**
-   * 获取物品颜色（考虑 hover/选中/分组/参照物状态）
-   *
-   * @param item - 物品数据
-   * @param type - 渲染类型（box/icon）
-   * @param mode - 渲染模式（box/icon/simple-box/model），默认为非 model 模式
-   */
-  function getItemColor(item: AppItem, type: 'box' | 'icon', mode?: string): number {
+  function getItemColor(item: AppItem, mode?: string): number {
     // Model 模式特殊处理：只有参照物需要颜色叠加，其他状态保持白色（由描边系统处理）
     if (mode === 'model') {
       // 参照物高亮（唯一需要颜色叠加的状态）
       if (uiStore.alignReferenceItemId === item.internalId) {
-        return 0xfacc15 // yellow-400
+        return ALIGN_REFERENCE_ITEM_COLOR
       }
       // 其他状态（hover/选中/组合）都返回白色，不影响纹理原色
       return 0xffffff
     }
 
     // 以下是 Box/Icon/SimpleBox 模式的原有逻辑
-    // hover 高亮优先级最高（即使物品已被选中，hover 时也显示为琥珀色）
-    if (isItemHovered(item.internalId)) {
-      return type === 'icon' ? 0xf59e0b : 0xf59e0b // Icon & Box/SimpleBox: amber-400
-    }
-
-    // 参照物高亮（次优先级）
-    if (uiStore.alignReferenceItemId === item.internalId) {
-      return type === 'icon' ? 0xfacc15 : 0xfacc15 // Icon & Box/SimpleBox: yellow-400
-    }
+    if (isItemHovered(item.internalId)) return HOVER_ITEM_COLOR
+    if (uiStore.alignReferenceItemId === item.internalId) return ALIGN_REFERENCE_ITEM_COLOR
 
     const selectedItemIds = editorStore.activeScheme?.selectedItemIds.value ?? new Set()
-
-    // 其次是选中高亮
-    if (selectedItemIds.has(item.internalId)) {
-      return type === 'icon' ? 0x60a5fa : 0x60a5fa // Icon & Box/SimpleBox: blue-400
-    }
+    if (selectedItemIds.has(item.internalId)) return SELECTED_ITEM_COLOR
 
     const groupId = item.groupId
     if (groupId > 0) {
       return convertColorToHex(getGroupColor(groupId))
     }
 
-    return 0x94a3b8
+    return DEFAULT_ITEM_COLOR
   }
 
   /**
@@ -114,7 +90,7 @@ export function useInstanceColor() {
       for (const [index, id] of indexToIdMap.entries()) {
         const item = itemById.get(id)
         if (!item) continue
-        scratchColor.setHex(getItemColor(item, 'box', mode))
+        scratchColor.setHex(getItemColor(item, mode))
         meshTarget.setColorAt(index, scratchColor)
       }
       if (meshTarget.instanceColor) meshTarget.instanceColor.needsUpdate = true
@@ -122,7 +98,7 @@ export function useInstanceColor() {
       for (const [index, id] of indexToIdMap.entries()) {
         const item = itemById.get(id)
         if (!item) continue
-        scratchColor.setHex(getItemColor(item, 'icon', mode))
+        scratchColor.setHex(getItemColor(item, mode))
         iconMeshTarget.setColorAt(index, scratchColor)
       }
       if (iconMeshTarget.instanceColor) iconMeshTarget.instanceColor.needsUpdate = true
@@ -130,7 +106,7 @@ export function useInstanceColor() {
       for (const [index, id] of indexToIdMap.entries()) {
         const item = itemById.get(id)
         if (!item) continue
-        scratchColor.setHex(getItemColor(item, 'box', mode))
+        scratchColor.setHex(getItemColor(item, mode))
         simpleBoxMeshTarget.setColorAt(index, scratchColor)
       }
       if (simpleBoxMeshTarget.instanceColor) simpleBoxMeshTarget.instanceColor.needsUpdate = true
@@ -146,7 +122,7 @@ export function useInstanceColor() {
         const mesh = modelMeshMap.get(meshInfo.meshKey)
         if (!mesh) continue
 
-        scratchColor.setHex(getItemColor(item, 'box', mode))
+        scratchColor.setHex(getItemColor(item, mode))
         mesh.setColorAt(meshInfo.localIndex, scratchColor)
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
       }
@@ -173,19 +149,19 @@ export function useInstanceColor() {
     if (mode === 'box' && meshTarget) {
       const index = idToIndexMap.get(id)
       if (index === undefined) return
-      scratchColor.setHex(getItemColor(item, 'box', mode))
+      scratchColor.setHex(getItemColor(item, mode))
       meshTarget.setColorAt(index, scratchColor)
       if (meshTarget.instanceColor) meshTarget.instanceColor.needsUpdate = true
     } else if (mode === 'icon' && iconMeshTarget) {
       const index = idToIndexMap.get(id)
       if (index === undefined) return
-      scratchColor.setHex(getItemColor(item, 'icon', mode))
+      scratchColor.setHex(getItemColor(item, mode))
       iconMeshTarget.setColorAt(index, scratchColor)
       if (iconMeshTarget.instanceColor) iconMeshTarget.instanceColor.needsUpdate = true
     } else if (mode === 'simple-box' && simpleBoxMeshTarget) {
       const index = idToIndexMap.get(id)
       if (index === undefined) return
-      scratchColor.setHex(getItemColor(item, 'box', mode))
+      scratchColor.setHex(getItemColor(item, mode))
       simpleBoxMeshTarget.setColorAt(index, scratchColor)
       if (simpleBoxMeshTarget.instanceColor) simpleBoxMeshTarget.instanceColor.needsUpdate = true
     } else if (mode === 'model' && modelMeshMap && modelInternalIdToMeshInfo) {
@@ -196,7 +172,7 @@ export function useInstanceColor() {
       const mesh = modelMeshMap.get(meshInfo.meshKey)
       if (!mesh) return
 
-      scratchColor.setHex(getItemColor(item, 'box', mode))
+      scratchColor.setHex(getItemColor(item, mode))
       mesh.setColorAt(meshInfo.localIndex, scratchColor)
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
     }
@@ -269,7 +245,6 @@ export function useInstanceColor() {
     hoveredItemId,
     sidebarHoveredItemIds,
     suppressedHoverId,
-    convertColorToHex,
     getItemColor,
     updateInstancesColor,
     updateInstanceColorById,

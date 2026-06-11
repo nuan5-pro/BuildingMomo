@@ -6,6 +6,7 @@ import { SCENE_BOUNDS_ORIGIN_ONLY_THRESHOLD } from '@/types/constants'
 import type { AppItem } from '@/types/editor'
 import { getAABBFromMatrix, getAABBFromMatrixAndModelBox } from './collision'
 import { buildDisplayWorldMatrixFromItem } from './scaleRenderCompensation'
+import { getSlidePathWorldBox, isSlidePathItem } from './slidePath'
 
 // Box 模式 / fallback 模式使用单位立方体作为基础几何体；
 // 实际尺寸已经编码在 world matrix 的 scale 中。
@@ -75,6 +76,11 @@ function getItemModelBox(item: AppItem, context: WorldBoundsContext): Box3 | nul
  * 注意这里统一返回的是“世界空间 AABB”，不是数据空间 bounds。
  */
 function getItemWorldBoxWithContext(item: AppItem, context: WorldBoundsContext): Box3 {
+  if (isSlidePathItem(item)) {
+    const slidePathBox = getSlidePathWorldBox(item)
+    if (slidePathBox) return slidePathBox
+  }
+
   // 相机 framing / focus 应该和用户“眼睛看到的东西”一致，
   // 所以这里用 display world matrix，而不是 raw world matrix。
   const { worldMatrix, modelBox } = buildDisplayWorldMatrixFromItem(item, {

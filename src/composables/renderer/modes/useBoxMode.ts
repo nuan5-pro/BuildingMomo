@@ -4,6 +4,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { applyScaleRenderCompensationToPositionInPlace } from '@/lib/scaleRenderCompensation'
 import { nextInstancedPoolCapacity, requiredInstanceCount } from '@/lib/renderInstanceBudget'
+import { resolveFurnitureSize } from '@/lib/slidePath'
 import { createBoxMaterial } from '../shared/materials'
 import {
   scratchMatrix,
@@ -84,7 +85,10 @@ export function useBoxMode() {
 
       // 缩放参数和尺寸
       const Scale = item.extra.Scale
-      const furnitureSize = gameDataStore.getFurnitureSize(item.gameId) ?? DEFAULT_FURNITURE_SIZE
+      const furnitureSize = resolveFurnitureSize(
+        item.gameId,
+        gameDataStore.getFurnitureSize(item.gameId) ?? DEFAULT_FURNITURE_SIZE
+      )
       const [sizeX, sizeY, sizeZ] = furnitureSize
 
       // 旋转

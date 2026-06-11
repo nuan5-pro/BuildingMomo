@@ -438,6 +438,18 @@ export function useThreeSelection(
     raycaster.setFromCamera(pointerNdc, camera)
 
     const hit = interactionAdapter.value.pick(raycaster)
+
+    if (hit?.kind === 'slide-path-point' && hit.pointIndex !== undefined) {
+      updateSelection([hit.internalId], false, { skipGroupExpansion: true })
+      uiStore.setActiveSlidePathPoint({
+        itemId: hit.internalId,
+        pointIndex: hit.pointIndex,
+      })
+      editorStore.gizmoMode = 'translate'
+      return
+    }
+
+    uiStore.setActiveSlidePathPoint(null)
     applySelectionAction(hit ? [hit.internalId] : [], {
       clearOnEmptyNew: true,
       applyIntersectOnEmpty: false,
@@ -447,6 +459,8 @@ export function useThreeSelection(
   function performBoxSelection(rect: SelectionRect) {
     const camera = cameraRef.value
     if (!camera) return
+
+    uiStore.setActiveSlidePathPoint(null)
 
     const viewport = uiStore.editorContainerRect
     const selectedIds = new Set<string>()
@@ -472,6 +486,8 @@ export function useThreeSelection(
   function performLassoSelection(points: ScreenPoint[]) {
     const camera = cameraRef.value
     if (!camera || points.length < 3) return
+
+    uiStore.setActiveSlidePathPoint(null)
 
     const viewport = uiStore.editorContainerRect
     const selectedIds = new Set<string>()

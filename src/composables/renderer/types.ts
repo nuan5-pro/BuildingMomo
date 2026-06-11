@@ -23,6 +23,8 @@ export interface RaycastHit {
   instanceId: number
   internalId: string
   distance: number
+  kind?: 'item' | 'slide-path-segment' | 'slide-path-point'
+  pointIndex?: number
 }
 
 /**

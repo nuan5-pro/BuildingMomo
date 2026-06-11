@@ -10,6 +10,7 @@ import { convertRotationGlobalToWorking } from '../../lib/coordinateTransform'
 import { matrixTransform } from '../../lib/matrixTransform'
 import { getOBBFromMatrix, getOBBFromMatrixAndModelBox, type OBB } from '../../lib/collision'
 import { buildDisplayWorldMatrixFromItem } from '../../lib/scaleRenderCompensation'
+import { getSlidePathWorldBox, isSlidePathItem } from '../../lib/slidePath'
 import { getThreeModelManager } from '../useThreeModelManager'
 
 /**
@@ -188,6 +189,30 @@ export function useTransformSelection() {
       const currentMode = settingsStore.settings.threeDisplayMode
 
       for (const item of selected) {
+        if (isSlidePathItem(item)) {
+          const box = getSlidePathWorldBox(item)
+          if (box) {
+            const min = box.min
+            const max = box.max
+            const corners = [
+              new Vector3(min.x, min.y, min.z),
+              new Vector3(min.x, min.y, max.z),
+              new Vector3(min.x, max.y, min.z),
+              new Vector3(min.x, max.y, max.z),
+              new Vector3(max.x, min.y, min.z),
+              new Vector3(max.x, min.y, max.z),
+              new Vector3(max.x, max.y, min.z),
+              new Vector3(max.x, max.y, max.z),
+            ]
+
+            for (const corner of corners) {
+              const dataPos = matrixTransform.worldPositionToData(corner)
+              allCorners.push(uiStore.dataToWorking(dataPos))
+            }
+          }
+          continue
+        }
+
         const {
           worldMatrix: matrix,
           useModelScale,

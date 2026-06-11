@@ -8,10 +8,13 @@ import { useEditorGroups } from '../composables/editor/useEditorGroups'
 import { useEditorHistory } from '../composables/editor/useEditorHistory'
 import { useEditorSelection } from '../composables/editor/useEditorSelection'
 import { useI18n } from '../composables/useI18n'
+import SlidePathPointEditor from './transform/SlidePathPointEditor.vue'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Item, ItemActions, ItemContent, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { SLIDE_PATH_GAME_ID } from '@/lib/slidePath'
+import type { AppItem } from '@/types/editor'
 
 const editorStore = useEditorStore()
 const gameDataStore = useGameDataStore()
@@ -52,6 +55,16 @@ function getFurnitureName(furniture: any, fallbackId: number) {
   if (!furniture) return t('sidebar.itemDefaultName', { id: fallbackId })
   if (locale.value === 'zh') return furniture.name_cn
   return furniture.name_en || furniture.name_cn
+}
+
+function getItemDisplayName(item: AppItem, furniture: any) {
+  if (item.gameId === SLIDE_PATH_GAME_ID) return t('sidebar.slidePathName')
+  return getFurnitureName(furniture, item.gameId)
+}
+
+function getItemIconUrl(itemId: number, hasFurniture: boolean) {
+  if (itemId === SLIDE_PATH_GAME_ID || !hasFurniture) return null
+  return gameDataStore.getIconUrl(itemId)
 }
 
 // 计算属性:选中物品列表
@@ -126,8 +139,9 @@ const selectedItemDetails = computed(() => {
     return {
       type: 'single' as const,
       internalId: item.internalId,
-      name: getFurnitureName(furniture, item.gameId),
-      icon: furniture ? gameDataStore.getIconUrl(item.gameId) : null,
+      name: getItemDisplayName(item, furniture),
+      icon: getItemIconUrl(item.gameId, !!furniture),
+      hideIcon: item.gameId === SLIDE_PATH_GAME_ID,
       itemId: item.gameId,
       instanceId: item.instanceId,
       dimensions,
@@ -144,6 +158,7 @@ const selectedItemDetails = computed(() => {
       itemId: number
       name: string
       icon: string | null
+      hideIcon: boolean
       count: number
     }
   >()
@@ -156,8 +171,9 @@ const selectedItemDetails = computed(() => {
       const furniture = gameDataStore.getFurniture(item.gameId)
       itemStats.set(item.gameId, {
         itemId: item.gameId,
-        name: getFurnitureName(furniture, item.gameId),
-        icon: furniture ? gameDataStore.getIconUrl(item.gameId) : null,
+        name: getItemDisplayName(item, furniture),
+        icon: getItemIconUrl(item.gameId, !!furniture),
+        hideIcon: item.gameId === SLIDE_PATH_GAME_ID,
         count: 1,
       })
     }
@@ -287,7 +303,7 @@ const currentOriginItemName = computed(() => {
   if (!item) return ''
 
   const furniture = gameDataStore.getFurniture(item.gameId)
-  return getFurnitureName(furniture, item.gameId)
+  return getItemDisplayName(item, furniture)
 })
 
 // 开始选择原点
@@ -375,6 +391,7 @@ function handleIconError(e: Event) {
           <div class="flex flex-col gap-3">
             <!-- 大图标展示区 -->
             <div
+              v-if="!selectedItemDetails.hideIcon"
               class="flex h-[150px] w-full items-center justify-center rounded-md bg-secondary p-4"
             >
               <img
@@ -400,6 +417,8 @@ function handleIconError(e: Event) {
                 {{ selectedItemDetails.dimensions }}
               </div>
             </div>
+
+            <SlidePathPointEditor />
           </div>
         </div>
 
@@ -413,11 +432,15 @@ function handleIconError(e: Event) {
             @mouseenter="setHoveredType(item.itemId)"
             @mouseleave="clearHoveredType"
           >
-            <ItemMedia v-if="item.icon" variant="image" class="size-8 rounded border border-border">
+            <ItemMedia
+              v-if="item.icon && !item.hideIcon"
+              variant="image"
+              class="size-8 rounded border border-border"
+            >
               <img :src="item.icon" :alt="item.name" @error="handleIconError" />
             </ItemMedia>
             <ItemMedia
-              v-else
+              v-else-if="!item.hideIcon"
               class="flex size-8 shrink-0 items-center justify-center rounded border border-border bg-card text-xs text-muted-foreground"
             >
               ?

@@ -10,7 +10,12 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useThreeSelection } from '@/composables/useThreeSelection'
 import { useThreeTransformGizmo } from '@/composables/useThreeTransformGizmo'
-import { useThreeInstancedRenderer } from '@/composables/renderer'
+import {
+  useThreeInstancedRenderer,
+  type InteractionAdapter,
+  type RaycastHit,
+} from '@/composables/renderer'
+import { useSlidePathRenderer } from '@/composables/renderer/useSlidePathRenderer'
 import { useThreeTooltip } from '@/composables/useThreeTooltip'
 import { useThreeCamera, type ViewPreset } from '@/composables/useThreeCamera'
 import { useThreeGrid } from '@/composables/useThreeGrid'
@@ -300,13 +305,59 @@ const {
   modelMeshMap,
   modelFallbackMesh,
   updateSelectedInstancesMatrix,
-  interactionAdapter,
-  setHoveredItemId,
+  interactionAdapter: standardInteractionAdapter,
+  setHoveredItemId: setStandardHoveredItemId,
   setupIconFacing,
   renderSelectionOutlineMaskPass,
   renderSelectionOutlineOverlay,
   syncOutlineSceneTransform,
 } = useThreeInstancedRenderer(isTransformDragging)
+
+const {
+  segmentMesh: slidePathSegmentMesh,
+  pointMesh: slidePathPointMesh,
+  interactionAdapter: slidePathInteractionAdapter,
+  setHoveredHit: setSlidePathHoveredHit,
+  updateItemWorldMatrices: updateSlidePathItemWorldMatrices,
+  previewPoint: previewSlidePathPoint,
+  clearPreview: clearSlidePathPreview,
+} = useSlidePathRenderer()
+
+// 合并标准 renderer 和飞花道 renderer 的交互适配器：raycast 取最近命中，框选合并两者候选集
+const interactionAdapter = ref<InteractionAdapter>({
+  pick: (raycaster) => {
+    const sHit = slidePathInteractionAdapter.value.pick(raycaster)
+    const nHit = standardInteractionAdapter.value.pick(raycaster)
+    if (!sHit) return nHit
+    if (!nHit) return sHit
+    return sHit.distance <= nHit.distance ? sHit : nHit
+  },
+  pickAsync: async (raycaster) => {
+    const [sHit, nHit] = await Promise.all([
+      slidePathInteractionAdapter.value.pickAsync(raycaster),
+      standardInteractionAdapter.value.pickAsync(raycaster),
+    ])
+    if (!sHit) return nHit
+    if (!nHit) return sHit
+    return sHit.distance <= nHit.distance ? sHit : nHit
+  },
+  cancelPick: () => {
+    slidePathInteractionAdapter.value.cancelPick()
+    standardInteractionAdapter.value.cancelPick()
+  },
+  forEachRegionCenterCandidate: (camera, viewport, visitor) => {
+    standardInteractionAdapter.value.forEachRegionCenterCandidate(camera, viewport, visitor)
+    slidePathInteractionAdapter.value.forEachRegionCenterCandidate(camera, viewport, visitor)
+  },
+})
+
+// hover 路由：标准物品和飞花道分别处理，飞花道需要额外传 hit 信息以区分 segment/point
+function setHoveredItemId(id: string | null, hit?: RaycastHit | null) {
+  setStandardHoveredItemId(id)
+  setSlidePathHoveredHit(
+    hit && (hit.kind === 'slide-path-segment' || hit.kind === 'slide-path-point') ? hit : null
+  )
+}
 
 // 自动管理 Icon facing（一次性调用）
 setupIconFacing(cameraPosition, cameraLookAt, cameraUp, currentViewPreset)
@@ -337,7 +388,12 @@ const {
   isTransformDragging,
   orbitControlsRef,
   activeCameraRef,
-  transformRef
+  transformRef,
+  {
+    updateItemWorldMatrices: updateSlidePathItemWorldMatrices,
+    previewPoint: previewSlidePathPoint,
+    clearPreview: clearSlidePathPreview,
+  }
 )
 
 // 自动管理 Gizmo 外观：外观应用完成后精确触发一次重渲染
@@ -867,6 +923,9 @@ onDeactivated(() => {
             <!-- 渲染回退 Mesh（用于缺少模型数据的物品，count=0 时 GPU 不渲染） -->
             <primitive v-if="modelFallbackMesh" :object="modelFallbackMesh" />
           </template>
+
+          <primitive v-if="slidePathSegmentMesh" :object="slidePathSegmentMesh" />
+          <primitive v-if="slidePathPointMesh" :object="slidePathPointMesh" />
         </TresGroup>
 
         <!-- 辅助元素 - 适配大场景 - 移至世界空间 -->

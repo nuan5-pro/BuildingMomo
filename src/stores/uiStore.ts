@@ -14,6 +14,12 @@ interface Position {
   y: number
   z: number
 }
+
+export interface ActiveSlidePathPoint {
+  itemId: string
+  pointIndex: number
+}
+
 import { useSettingsStore } from './settingsStore'
 
 /**
@@ -88,6 +94,9 @@ export const useUIStore = defineStore('ui', () => {
 
   // 替换家具：点选目标实例模式（临时状态，不持久化）
   const isSelectingReplaceTarget = ref(false)
+
+  // 飞花滑道节点编辑目标（临时状态，不持久化）
+  const activeSlidePathPoint = ref<ActiveSlidePathPoint | null>(null)
 
   // ========== 视图模式管理 ==========
 
@@ -342,6 +351,10 @@ export const useUIStore = defineStore('ui', () => {
     isSelectingReplaceTarget.value = selecting
   }
 
+  function setActiveSlidePathPoint(target: ActiveSlidePathPoint | null) {
+    activeSlidePathPoint.value = target ? { ...target } : null
+  }
+
   function setAlignReferenceItem(itemId: string | null) {
     alignReferenceItemId.value = itemId
   }
@@ -418,6 +431,7 @@ export const useUIStore = defineStore('ui', () => {
     alignReferencePosition,
     isSelectingQuickAlignTarget,
     isSelectingReplaceTarget,
+    activeSlidePathPoint,
     statusBarCollapsed,
     sidebarCollapsed,
 
@@ -469,5 +483,6 @@ export const useUIStore = defineStore('ui', () => {
     setAlignReferencePosition,
     setSelectingQuickAlignTarget,
     setSelectingReplaceTarget,
+    setActiveSlidePathPoint,
   }
 })

@@ -4,8 +4,9 @@ import { useGameDataStore } from '@/stores/gameDataStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useI18n } from './useI18n'
-import type { InteractionAdapter } from './renderer/types'
+import type { InteractionAdapter, RaycastHit } from './renderer/types'
 import { RAYCAST_SKIP_ITEM_THRESHOLD } from '@/types/constants'
+import { SLIDE_PATH_GAME_ID } from '@/lib/slidePath'
 
 export interface ThreeTooltipData {
   name: string
@@ -28,7 +29,7 @@ export function useThreeTooltip(
   interactionAdapter: Ref<InteractionAdapter>,
   isEnabled: Ref<boolean>,
   isTransformDragging?: Ref<boolean>,
-  setHoveredItemId?: (id: string | null) => void,
+  setHoveredItemId?: (id: string | null, hit?: RaycastHit | null) => void,
   isCameraMoving?: Ref<boolean>
 ) {
   const raycaster = markRaw(new Raycaster())
@@ -57,7 +58,7 @@ export function useThreeTooltip(
       tooltipData.value = null
     }
     if (setHoveredItemId) {
-      setHoveredItemId(null)
+      setHoveredItemId(null, null)
     }
   }
 
@@ -119,13 +120,15 @@ export function useThreeTooltip(
     const furnitureInfo = gameDataStore.getFurniture(item.gameId)
 
     let name = ''
-    if (!furnitureInfo) {
-      name = t('sidebar.itemDefaultName', { id: item.gameId })
-    } else {
+    if (furnitureInfo) {
       name =
         locale.value === 'zh'
           ? furnitureInfo.name_cn
           : furnitureInfo.name_en || furnitureInfo.name_cn
+    } else if (item.gameId === SLIDE_PATH_GAME_ID) {
+      name = t('sidebar.slidePathName')
+    } else {
+      name = t('sidebar.itemDefaultName', { id: item.gameId })
     }
 
     tooltipData.value = {
@@ -139,7 +142,7 @@ export function useThreeTooltip(
     tooltipVisible.value = true
 
     if (setHoveredItemId) {
-      setHoveredItemId(hit.internalId)
+      setHoveredItemId(hit.internalId, hit)
     }
   }
 
