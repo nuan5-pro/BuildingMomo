@@ -50,11 +50,9 @@ export function useOrbitControlsInput(
           RIGHT: MOUSE.ROTATE,
         }
       } else {
-        return {
-          LEFT: MOUSE.ROTATE,
-          MIDDLE: MOUSE.PAN,
-          RIGHT: MOUSE.PAN,
-        }
+        return cameraInput.orbitRotateButton.value === 'right'
+          ? { LEFT: MOUSE.ROTATE, RIGHT: MOUSE.ROTATE }
+          : { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.ROTATE }
       }
     }
 

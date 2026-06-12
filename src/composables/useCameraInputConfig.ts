@@ -97,6 +97,7 @@ export function useCameraInputConfig() {
     const flightKey = flightLookButton.value
 
     return (
+      (currentTool.value === 'hand' && button === 0) ||
       (flightKey === 'middle' && button === 1) ||
       (flightKey === 'right' && button === 2) ||
       (enableAltLeftClick.value && isAltOnly.value && button === 0)
@@ -111,6 +112,7 @@ export function useCameraInputConfig() {
     const flightKey = flightLookButton.value
 
     return (
+      (currentTool.value === 'hand' && button === 0) ||
       (flightKey === 'middle' && button === 1) ||
       (flightKey === 'right' && button === 2) ||
       (enableAltLeftClick.value && button === 0) // Alt 释放会改变 isAltOnly
