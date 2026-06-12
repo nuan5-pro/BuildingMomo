@@ -42,7 +42,6 @@ BuildingMomo（搬砖吧大喵）
 ### 🌐 在线使用
 
 - [Cloudflare Pages](https://infinitymomo.com)
-- [Vercel](https://building.infinitymomo.com)
 - [Github Pages](https://chaniok.github.io/BuildingMomo)
 
 ### 💻 本地运行

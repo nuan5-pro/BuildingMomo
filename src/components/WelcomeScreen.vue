@@ -28,8 +28,8 @@ const githubUrl = computed(() => {
 
 const spinningMomoUrl = computed(() => {
   return locale.value === 'en'
-    ? 'https://spinning.infinitymomo.com/en/'
-    : 'https://spinning.infinitymomo.com/'
+    ? 'https://spin.infinitymomo.com/en/'
+    : 'https://spin.infinitymomo.com/'
 })
 
 // 检查 File System Access API 是否支持
