@@ -7,6 +7,7 @@ import { WatchHistoryDB } from '@/lib/watchHistoryStore'
 import { WatchHandleStore } from '@/lib/watchHandleStore'
 import {
   SAVE_DATA_FILENAME_REGEX,
+  createDefaultManualExportFileName,
   extractUidFromSaveDataFilename,
   findX6GameDirectory,
   findBuildDataDirectory,
@@ -15,6 +16,7 @@ import {
   findLatestBuildRecord,
   findLatestBuildSaveData,
   isBuildSaveDataFile,
+  isValidSaveDataExportFileName,
 } from './watchMode.fs'
 import { buildRecordPayloadFromGameItems, parseBuildRecordToGameData } from './watchMode.record'
 
@@ -869,6 +871,25 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
   }
 
   /**
+   * 解析手动导出时的下载文件名。
+   * 优先级：合法存档名 → 监听目录最新 BUILD 存档 → 时间戳兜底。
+   */
+  async function resolveManualExportFileName(filePath?: string): Promise<string> {
+    if (filePath && isValidSaveDataExportFileName(filePath)) {
+      return filePath
+    }
+
+    if (watchState.value.isActive && watchState.value.dirHandle) {
+      const latest = await findLatestBuildOnlySaveData(watchState.value.dirHandle)
+      if (latest) {
+        return latest.file.name
+      }
+    }
+
+    return createDefaultManualExportFileName()
+  }
+
+  /**
    * 从历史记录中导入指定快照。
    * 从 IndexedDB 读取完整内容后走正常的 importFromContent 流程。
    */
@@ -912,6 +933,7 @@ export function createWatchModeOps(params: CreateWatchModeOpsParams) {
     deleteHistoryRecord,
     importFromHistory,
     saveToGame,
+    resolveManualExportFileName,
     getRootDirHandle: () => rootDirHandle,
     cleanup: stopPolling,
   }

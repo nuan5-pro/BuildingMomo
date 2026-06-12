@@ -218,6 +218,24 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
     })
   }
 
+  const watchOps = createWatchModeOps({
+    editorStore,
+    settingsStore,
+    notification,
+    t,
+    ensureResourcesReady,
+    preloadActiveSchemeResources,
+    prepareDataForSave,
+  })
+
+  const archiveOps = createArchiveOps({
+    editorStore,
+    notification,
+    t,
+    isWatchActive: () => watchOps.watchState.value.isActive,
+    getRootDirHandle: watchOps.getRootDirHandle,
+  })
+
   async function exportJSON(filename?: string): Promise<void> {
     if ((editorStore.activeScheme?.items.value.length ?? 0) === 0) {
       notification.warning(t('fileOps.export.noData'))
@@ -238,14 +256,9 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
 
     const link = document.createElement('a')
     link.href = url
-    let downloadName = filename
-    if (!downloadName) {
-      if (editorStore.activeScheme?.filePath.value) {
-        downloadName = editorStore.activeScheme.filePath.value
-      } else {
-        downloadName = `BUILD_SAVEDATA_${Date.now()}.json`
-      }
-    }
+    const downloadName =
+      filename ??
+      (await watchOps.resolveManualExportFileName(editorStore.activeScheme?.filePath.value))
     link.download = downloadName
     link.click()
 
@@ -253,24 +266,6 @@ export function useFileOperations(editorStore: ReturnType<typeof useEditorStore>
 
     console.log(`[FileOps] Exported ${gameItems.length} items to ${link.download}`)
   }
-
-  const watchOps = createWatchModeOps({
-    editorStore,
-    settingsStore,
-    notification,
-    t,
-    ensureResourcesReady,
-    preloadActiveSchemeResources,
-    prepareDataForSave,
-  })
-
-  const archiveOps = createArchiveOps({
-    editorStore,
-    notification,
-    t,
-    isWatchActive: () => watchOps.watchState.value.isActive,
-    getRootDirHandle: watchOps.getRootDirHandle,
-  })
 
   async function startWatchMode() {
     await watchOps.startWatchMode()

@@ -47,6 +47,17 @@ export function isBuildRecordFile(name: string): boolean {
   return BUILD_RECORD_FILENAME_REGEX.test(name)
 }
 
+/** 判断文件名是否可作为手动导出的游戏存档名（排除 13 位临时 UID） */
+export function isValidSaveDataExportFileName(fileName: string): boolean {
+  const match = fileName.match(SAVE_DATA_FILENAME_REGEX)
+  return !!(match?.[2] && match[2].length !== 13)
+}
+
+/** 无法解析出合法存档名时的默认手动导出文件名 */
+export function createDefaultManualExportFileName(): string {
+  return `BUILD_SAVEDATA_${Date.now()}.json`
+}
+
 /**
  * 从起始目录句柄出发，依次进入 pathParts 指定的子目录。
  * 任何一层不存在则返回 null。
