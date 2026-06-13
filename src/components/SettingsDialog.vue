@@ -67,7 +67,7 @@ async function handleVerify() {
   if (success) {
     passwordInput.value = ''
   } else {
-    notification.error('访问码无效')
+    notification.error(t('settings.experimental.invalidAccessCode'))
   }
 }
 </script>
@@ -186,8 +186,10 @@ async function handleVerify() {
               <!-- 实验性功能 -->
               <div v-if="isSecureMode" class="flex items-center justify-between">
                 <div class="space-y-0.5">
-                  <Label>实验性功能</Label>
-                  <p class="text-xs text-muted-foreground">启用高级功能</p>
+                  <Label>{{ t('settings.experimental.label') }}</Label>
+                  <p class="text-xs text-muted-foreground">
+                    {{ t('settings.experimental.hint') }}
+                  </p>
                 </div>
                 <div class="flex items-center gap-2">
                   <template v-if="!settingsStore.isAuthenticated">
@@ -195,7 +197,7 @@ async function handleVerify() {
                       <input
                         v-model="passwordInput"
                         type="text"
-                        placeholder="访问码"
+                        :placeholder="t('settings.experimental.accessCodePlaceholder')"
                         class="password-style w-32 rounded-md border border-input bg-background px-3 py-1.5 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                         @keyup.enter="handleVerify"
                       />
@@ -204,7 +206,7 @@ async function handleVerify() {
                         :disabled="settingsStore.isVerifying || !passwordInput"
                         class="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                       >
-                        {{ settingsStore.isVerifying ? '...' : '启用' }}
+                        {{ settingsStore.isVerifying ? '...' : t('settings.experimental.enable') }}
                       </button>
                     </div>
                   </template>
@@ -213,7 +215,7 @@ async function handleVerify() {
                     disabled
                     class="cursor-not-allowed rounded-md bg-muted px-4 py-1.5 text-sm font-medium text-muted-foreground"
                   >
-                    已启用
+                    {{ t('settings.experimental.enabled') }}
                   </button>
                 </div>
               </div>
