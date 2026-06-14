@@ -64,14 +64,53 @@
 
     <h2>Troubleshooting</h2>
 
+    <h3>"Can't Open This Folder" (Contains System Files)</h3>
+    <p>
+      <strong>Issue:</strong> After clicking <strong>File &gt; Link Game Folder</strong>, the
+      browser shows a dialog saying it can't open the folder because it contains system files.
+    </p>
+    <p>
+      <strong>Cause:</strong> The game is installed under a path browsers block web apps from
+      accessing, such as <code>Program Files</code>. This is a Chrome / Edge security restriction
+      that the tool cannot bypass.
+    </p>
+    <p><strong>Solutions (choose one):</strong></p>
+    <ol>
+      <li>
+        <strong>Move the game to a normal path</strong>
+        <ul>
+          <li>Move the entire game folder to a normal location such as <code>D:\Games\</code></li>
+          <li>
+            Game launcher → Settings (top-right) → Download Settings → Game Installation Path →
+            folder icon to select the new directory (no re-download or full reinstall required)
+          </li>
+        </ul>
+      </li>
+      <li>
+        <strong>Use manual import/export instead</strong>
+        <ul>
+          <li>
+            <strong>File &gt; Import Data</strong>: select a JSON file from the game's
+            <code>BuildData</code> folder
+          </li>
+          <li>
+            <strong>File &gt; Export Data</strong>: download after editing, then manually copy back
+            to <code>BuildData</code> to replace the original file
+          </li>
+          <li>Do not use folder monitoring</li>
+        </ul>
+      </li>
+    </ol>
+
     <h3>"Save to Game" Permission Error</h3>
     <p>
-      <strong>Issue:</strong> Save fails with an error message like
+      <strong>Issue:</strong> The game folder is already linked (top-right shows
+      <strong>Monitoring</strong>), but saving fails with an error like
       <code>...could not be modified due to the state of the underlying filesystem</code>.
     </p>
     <p>
-      <strong>Cause:</strong> The game is installed in a system-protected directory (e.g., Program
-      Files), preventing the browser from writing files.
+      <strong>Cause:</strong> The browser granted write permission, but Windows rejected the actual
+      write. Usually the directory containing <code>BuildData</code> is not writable for your user.
     </p>
     <p><strong>Solutions (choose one):</strong></p>
     <ol>
@@ -86,16 +125,23 @@
       <li>
         <strong>Modify folder permissions</strong>
         <ul>
-          <li>Right-click BuildData folder → Properties → Security → Edit</li>
+          <li>Right-click the <code>BuildData</code> folder → Properties → Security → Edit</li>
           <li>Select your current user (or Everyone)</li>
           <li>Check "Allow" for "Full control"</li>
         </ul>
       </li>
       <li>
-        <strong>Use export instead</strong>
+        <strong>Use manual import/export instead</strong>
         <ul>
-          <li>Use "File > Export Scheme" to download the JSON file</li>
-          <li>Manually copy it to the game directory to replace the original file</li>
+          <li>
+            <strong>File &gt; Import Data</strong>: select a JSON file from the game's
+            <code>BuildData</code> folder
+          </li>
+          <li>
+            <strong>File &gt; Export Data</strong>: download after editing, then manually copy back
+            to <code>BuildData</code> to replace the original file
+          </li>
+          <li>Without using <strong>Save to Game</strong></li>
         </ul>
       </li>
     </ol>

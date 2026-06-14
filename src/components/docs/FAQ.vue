@@ -56,13 +56,50 @@
 
     <h2>使用中的常见问题</h2>
 
+    <h3>选择游戏目录时提示「含有系统文件」</h3>
+    <p>
+      <strong>问题描述：</strong>点击
+      <strong>文件 &gt; 选择游戏目录</strong>
+      后，浏览器弹出提示，表示无法打开该文件夹（含有系统文件）。
+    </p>
+    <p>
+      <strong>原因：</strong>游戏安装在 <code>Program Files</code>
+      等浏览器禁止网页访问的目录。这是 Chrome / Edge 的安全限制，工具无法绕过。
+    </p>
+    <p><strong>解决方法（任选其一）：</strong></p>
+    <ol>
+      <li>
+        <strong>将游戏目录移到普通路径</strong>
+        <ul>
+          <li>将整个游戏文件夹移动到 <code>D:\Games\</code> 等普通目录</li>
+          <li>
+            打开游戏启动器 → 右上角「设置」→「下载设置」→「游戏资源安装路径」→
+            点文件夹图标选新目录（无需重新下载或完整重装）
+          </li>
+        </ul>
+      </li>
+      <li>
+        <strong>改用手动导入/导出</strong>
+        <ul>
+          <li>「文件 &gt; 导入建造数据」：从游戏 <code>BuildData</code> 目录选择 JSON 载入</li>
+          <li>
+            「文件 &gt; 导出建造数据」：编辑后下载 JSON，手动复制回
+            <code>BuildData</code> 替换原文件
+          </li>
+          <li>不使用目录监控功能</li>
+        </ul>
+      </li>
+    </ol>
+
     <h3>「保存到游戏」提示权限错误</h3>
     <p>
-      <strong>问题描述：</strong>保存失败，错误信息类似
+      <strong>问题描述：</strong
+      >已成功连接游戏目录（右上角显示「监控中」），但保存失败，错误信息类似
       <code>...could not be modified due to the state of the underlying filesystem</code>。
     </p>
     <p>
-      <strong>原因：</strong>游戏安装在系统保护目录（如 Program Files），浏览器无法直接写入文件。
+      <strong>原因：</strong>浏览器已允许写入，但 Windows 拒绝了实际写入，通常是
+      <code>BuildData</code> 所在目录对当前用户没有写入权限。
     </p>
     <p><strong>解决方法（任选其一）：</strong></p>
     <ol>
@@ -77,16 +114,20 @@
       <li>
         <strong>修改文件夹权限</strong>
         <ul>
-          <li>右键 BuildData 文件夹 → 属性 → 安全 → 编辑</li>
+          <li>右键 <code>BuildData</code> 文件夹 → 属性 → 安全 → 编辑</li>
           <li>选择当前用户（或 Everyone）</li>
           <li>勾选"完全控制"的"允许"</li>
         </ul>
       </li>
       <li>
-        <strong>使用导出功能代替</strong>
+        <strong>改用手动导入/导出</strong>
         <ul>
-          <li>使用「文件 > 导出建造数据」下载 JSON 文件</li>
-          <li>手动复制到游戏目录替换原文件</li>
+          <li>「文件 &gt; 导入建造数据」：从游戏 <code>BuildData</code> 目录选择 JSON 载入</li>
+          <li>
+            「文件 &gt; 导出建造数据」：编辑后下载 JSON，手动复制回
+            <code>BuildData</code> 替换原文件
+          </li>
+          <li>无需使用「保存到游戏」</li>
         </ul>
       </li>
     </ol>
