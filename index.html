@@ -36,8 +36,14 @@
         const here = new URL(window.location.href)
         if (!here.pathname.endsWith('/')) here.pathname += '/'
 
-        const toEn = () => window.location.replace(new URL('en/', here).toString())
-        const toRoot = () => window.location.replace(new URL('../', here).toString())
+        const replacePreservingQueryAndHash = (target) => {
+          target.search = here.search
+          target.hash = here.hash
+          window.location.replace(target.toString())
+        }
+
+        const toEn = () => replacePreservingQueryAndHash(new URL('en/', here))
+        const toRoot = () => replacePreservingQueryAndHash(new URL('../', here))
 
         if (stored === 'en' && !inEn) return toEn()
         if (stored === 'zh' && inEn) return toRoot()
