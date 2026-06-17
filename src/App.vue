@@ -154,6 +154,7 @@ useKeyboardShortcuts({
   executeCommand: commandStore.executeCommand,
 })
 
+// 首屏就绪：有会话标记时需等 restore 完成；无标记时立即 true，避免 WelcomeScreen 闪烁
 const isAppReady = ref(false)
 const shouldShowRotateMask = computed(
   () =>
@@ -221,45 +222,38 @@ onMounted(async () => {
   // 初始化游戏数据（异步加载）
   void gameDataStore.initialize()
 
-  const startBackgroundServices = () => {
-    // 启动监控
-    if (isWorkerActive.value) {
-      startMonitoring()
-    }
-
-    // 启动时静默恢复文件监控（仅在已授权时生效，不会触发授权弹窗）
-    commandStore.fileOps.restoreWatchModeSilently().catch((error: unknown) => {
-      console.warn('[App] Silent watch mode restore failed:', error)
-    })
-  }
-
-  const restorePromise = restoreWorkspace()
-  const shouldWaitForRestore =
+  // 工作台恢复快路径：localStorage 标记为同步读取，用于决定是否等待 IndexedDB。
+  // - 有标记：上次关闭时内存中仍有 tab，await restore 后再亮屏。
+  // - 无标记：视为空会话，不读 IndexedDB，立即 isAppReady 以加快首屏。
+  // 数据可靠性由 workspaceSnapshotStore（主库 + fallback 库各一份）负责，与 marker 决策分离。
+  const shouldRestore =
     settingsStore.settings.enableAutoSave && localStorage.getItem('has_unsaved_session') === 'true'
 
-  if (shouldWaitForRestore) {
+  if (shouldRestore) {
     try {
-      await restorePromise
+      await restoreWorkspace()
     } catch (e) {
       console.error('[App] Restore failed:', e)
-    } finally {
-      await importStartupSchemeCode(startupSchemeCode)
-      isAppReady.value = true
-      startBackgroundServices()
     }
   } else {
-    // marker 缺失只代表“不阻塞首屏”；后台仍会读取 IDB 作为工作台真相。
-    // 恢复检查完成前不会启动 worker，避免空内存覆盖旧快照。
     isAppReady.value = true
-    restorePromise
-      .catch((e) => {
-        console.error('[App] Restore failed:', e)
-      })
-      .then(() => importStartupSchemeCode(startupSchemeCode))
-      .finally(() => {
-        startBackgroundServices()
-      })
   }
+
+  await importStartupSchemeCode(startupSchemeCode)
+
+  if (shouldRestore) {
+    isAppReady.value = true
+  }
+
+  // restore 已完成（或已跳过）后再 init worker，避免空内存快照写回 IndexedDB
+  if (isWorkerActive.value) {
+    startMonitoring()
+  }
+
+  // 启动时静默恢复文件监控（仅在已授权时生效，不会触发授权弹窗）
+  commandStore.fileOps.restoreWatchModeSilently().catch((error: unknown) => {
+    console.warn('[App] Silent watch mode restore failed:', error)
+  })
 })
 
 onUnmounted(() => {

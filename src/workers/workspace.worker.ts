@@ -1,9 +1,7 @@
 import * as Comlink from 'comlink'
-import { set } from 'idb-keyval'
+import { saveWorkspaceSnapshot } from '../lib/workspaceSnapshotStore'
 import type { AppItem } from '../types/editor'
 import type { WorkspaceSnapshot, ValidationResult } from '../types/persistence'
-
-const STORAGE_KEY = 'workspace_snapshot'
 
 // 浮点数容差常量
 // 用于处理浮点数存储精度误差，避免误报
@@ -224,6 +222,7 @@ function runValidation(
 }
 
 // --- 持久化逻辑 ---
+// 经 workspaceSnapshotStore 写入：主库 + fallback 库各一份 latest，不再使用 idb-keyval 默认 keyval-store。
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -241,11 +240,10 @@ const scheduleSave = () => {
 }
 
 const saveSnapshot = async () => {
-  // 关键修改：检查 enableAutoSave
   if (!currentSnapshot || !settings.enableAutoSave) return
 
   try {
-    await set(STORAGE_KEY, currentSnapshot)
+    await saveWorkspaceSnapshot(currentSnapshot)
     postMessage({ type: 'SAVE_COMPLETE', timestamp: Date.now() })
   } catch (e) {
     console.error('[Worker] Failed to save snapshot', e)
