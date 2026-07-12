@@ -30,22 +30,40 @@ export interface ScaleCompensationSizes {
 const DEFAULT_FURNITURE_SIZE: [number, number, number] = [100, 100, 150]
 const COMPENSATION_EPSILON = 0.001
 
-// 游戏缩放后“锚点漂移”分两类，用两张表互斥配置（同一 gameId 不能同时出现在两表）。
+// 游戏缩放后“锚点漂移”分三类，用三张表互斥配置。
 // - X 类：沿物品局部 X 补偿，标量 ((Scale.Y - Scale.X) * 0.5 * sizeX)
 // - Y 类：沿旋转后局部 Y 轴负方向补偿，标量与 X 类相反且用 sizeY：((Scale.X - Scale.Y) * 0.5 * sizeY)
+// - XY 类：同时补偿 X/Y，其中 X 方向与 X 类相反，Y 方向与 Y 类相同
 export const SCALE_RENDER_COMPENSATION_X_GAME_IDS = [
   1170000307, 1170000582, 1170000813, 1170000139, 1170000140, 1170000145, 1170000235, 1170000236,
   1170000241, 1170000282, 1170000492, 1170000491,
 ] as const
 
-export const SCALE_RENDER_COMPENSATION_Y_GAME_IDS = [1170000345, 1170000346, 1170000218] as const
+export const SCALE_RENDER_COMPENSATION_Y_GAME_IDS = [
+  1170000345, 1170000346, 1170000218, 1170000336, 1170000338, 1170000317, 1170000341, 1170000315,
+] as const
+
+export const SCALE_RENDER_COMPENSATION_XY_GAME_IDS = [1170000010, 1170000342] as const
 
 const scaleRenderCompensationXSet = new Set<number>(SCALE_RENDER_COMPENSATION_X_GAME_IDS)
 const scaleRenderCompensationYSet = new Set<number>(SCALE_RENDER_COMPENSATION_Y_GAME_IDS)
+const scaleRenderCompensationXYSet = new Set<number>(SCALE_RENDER_COMPENSATION_XY_GAME_IDS)
 
-for (const id of SCALE_RENDER_COMPENSATION_Y_GAME_IDS) {
-  if (scaleRenderCompensationXSet.has(id)) {
-    throw new Error(`[scaleRenderCompensation] gameId ${id} 不能同时出现在 X 与 Y 白名单中`)
+for (const [axis, ids] of [
+  ['x', SCALE_RENDER_COMPENSATION_X_GAME_IDS],
+  ['y', SCALE_RENDER_COMPENSATION_Y_GAME_IDS],
+  ['xy', SCALE_RENDER_COMPENSATION_XY_GAME_IDS],
+] as const) {
+  for (const id of ids) {
+    const matchCount =
+      Number(scaleRenderCompensationXSet.has(id)) +
+      Number(scaleRenderCompensationYSet.has(id)) +
+      Number(scaleRenderCompensationXYSet.has(id))
+    if (matchCount > 1) {
+      throw new Error(
+        `[scaleRenderCompensation] gameId ${id} 所在的 ${axis.toUpperCase()} 白名单与其他白名单重复`
+      )
+    }
   }
 }
 
@@ -56,11 +74,12 @@ const scratchLocalQuaternion = new Quaternion()
 const scratchLocalScale = new Vector3()
 const scratchModelSize = new Vector3()
 
-export type ScaleRenderCompensationAxis = 'none' | 'x' | 'y'
+export type ScaleRenderCompensationAxis = 'none' | 'x' | 'y' | 'xy'
 
 export function getScaleRenderCompensationAxis(gameId: number): ScaleRenderCompensationAxis {
   if (scaleRenderCompensationXSet.has(gameId)) return 'x'
   if (scaleRenderCompensationYSet.has(gameId)) return 'y'
+  if (scaleRenderCompensationXYSet.has(gameId)) return 'xy'
   return 'none'
 }
 
@@ -68,22 +87,22 @@ export function hasScaleRenderCompensation(gameId: number): boolean {
   return getScaleRenderCompensationAxis(gameId) !== 'none'
 }
 
-export function getScaleRenderCompensationAmount(
+export function getScaleRenderCompensationAmounts(
   item: AppItem,
   sizes: ScaleCompensationSizes
-): number {
+): { x: number; y: number } {
   const axis = getScaleRenderCompensationAxis(item.gameId)
   if (axis === 'none') {
-    return 0
+    return { x: 0, y: 0 }
   }
 
   const scale = item.extra.Scale
   const dx = (scale?.Y ?? 1) - (scale?.X ?? 1)
-  if (axis === 'x') {
-    return dx * 0.5 * sizes.sizeX
+  return {
+    x: axis === 'x' ? dx * 0.5 * sizes.sizeX : axis === 'xy' ? -dx * 0.5 * sizes.sizeX : 0,
+    // Y 类：与 X 类标量互为相反数，半边长用 sizeY（沿局部 -Y 施加）
+    y: axis === 'y' || axis === 'xy' ? -dx * 0.5 * sizes.sizeY : 0,
   }
-  // Y 类：与 X 类标量互为相反数，半边长用 sizeY（沿局部 Y 施加）
-  return -dx * 0.5 * sizes.sizeY
 }
 
 export function applyScaleRenderCompensationToPositionInPlace(
@@ -99,18 +118,23 @@ export function applyScaleRenderCompensationToPositionInPlace(
     return position
   }
 
-  const compensationAmount = getScaleRenderCompensationAmount(item, sizes)
-  if (Math.abs(compensationAmount) <= COMPENSATION_EPSILON) {
+  const amounts = getScaleRenderCompensationAmounts(item, sizes)
+  if (Math.abs(amounts.x) <= COMPENSATION_EPSILON && Math.abs(amounts.y) <= COMPENSATION_EPSILON) {
     return position
   }
 
-  if (axis === 'x') {
-    scratchLocalAxis.set(1, 0, 0).applyQuaternion(localRotation)
-  } else {
-    // Y 类：沿旋转后的局部 Y 轴负方向
-    scratchLocalAxis.set(0, -1, 0).applyQuaternion(localRotation)
+  if (Math.abs(amounts.x) > COMPENSATION_EPSILON) {
+    position.addScaledVector(
+      scratchLocalAxis.set(1, 0, 0).applyQuaternion(localRotation),
+      amounts.x
+    )
   }
-  position.addScaledVector(scratchLocalAxis, compensationAmount)
+  if (Math.abs(amounts.y) > COMPENSATION_EPSILON) {
+    position.addScaledVector(
+      scratchLocalAxis.set(0, -1, 0).applyQuaternion(localRotation),
+      amounts.y
+    )
+  }
   return position
 }
 
@@ -126,20 +150,26 @@ export function applyScaleRenderCompensationToWorldMatrixInPlace(
     return worldMatrix
   }
 
-  const compensationAmount = getScaleRenderCompensationAmount(item, sizes)
-  if (Math.abs(compensationAmount) <= COMPENSATION_EPSILON) {
+  const amounts = getScaleRenderCompensationAmounts(item, sizes)
+  if (Math.abs(amounts.x) <= COMPENSATION_EPSILON && Math.abs(amounts.y) <= COMPENSATION_EPSILON) {
     return worldMatrix
   }
 
   scratchLocalMatrix.copy(matrixTransform.parentFlipMatrix).multiply(worldMatrix)
   scratchLocalMatrix.decompose(scratchLocalPosition, scratchLocalQuaternion, scratchLocalScale)
 
-  if (axis === 'x') {
-    scratchLocalAxis.set(1, 0, 0).applyQuaternion(scratchLocalQuaternion)
-  } else {
-    scratchLocalAxis.set(0, -1, 0).applyQuaternion(scratchLocalQuaternion)
+  if (Math.abs(amounts.x) > COMPENSATION_EPSILON) {
+    scratchLocalPosition.addScaledVector(
+      scratchLocalAxis.set(1, 0, 0).applyQuaternion(scratchLocalQuaternion),
+      amounts.x
+    )
   }
-  scratchLocalPosition.addScaledVector(scratchLocalAxis, compensationAmount)
+  if (Math.abs(amounts.y) > COMPENSATION_EPSILON) {
+    scratchLocalPosition.addScaledVector(
+      scratchLocalAxis.set(0, -1, 0).applyQuaternion(scratchLocalQuaternion),
+      amounts.y
+    )
+  }
   scratchLocalMatrix.compose(scratchLocalPosition, scratchLocalQuaternion, scratchLocalScale)
 
   worldMatrix.copy(matrixTransform.parentFlipMatrix).multiply(scratchLocalMatrix)
