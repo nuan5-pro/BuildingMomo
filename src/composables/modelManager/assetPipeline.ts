@@ -7,7 +7,6 @@ import {
   type Texture,
 } from 'three'
 import { type GLTF, GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { getGLBCacheEntry, putGLBCacheEntry } from '@/lib/glbCache'
 import type { ModelAssetProfile } from '@/types/furniture'
 import {
   buildMaterialRegistryFromGLTF,
@@ -128,27 +127,18 @@ export function createMeshAssetData(
 
 export async function loadGLBModel(
   gltfLoader: GLTFLoader,
-  profile: ModelAssetProfile,
   modelBaseUrl: string,
   meshPath: string,
   hash?: string
 ): Promise<GLTF | null> {
   const fileName = meshPath.endsWith('.glb') ? meshPath : `${meshPath}.glb`
-  const url = `${modelBaseUrl}${fileName}`
+  const assetUrl = `${modelBaseUrl}${fileName}`
+  const url = hash ? `${assetUrl}?v=${encodeURIComponent(hash)}` : assetUrl
 
   try {
-    if (hash) {
-      const entry = await getGLBCacheEntry(profile, meshPath)
-      if (entry?.hash === hash) {
-        return (await gltfLoader.parseAsync(entry.buffer, url)) as GLTF
-      }
-    }
-
     const response = await fetch(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const buffer = await response.arrayBuffer()
-
-    if (hash) putGLBCacheEntry(profile, meshPath, hash, buffer).catch(() => {})
 
     return (await gltfLoader.parseAsync(buffer, url)) as GLTF
   } catch (error) {

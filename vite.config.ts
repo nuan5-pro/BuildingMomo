@@ -69,6 +69,14 @@ export default defineConfig(() => {
               },
             },
             {
+              // 3D 模型：内容 hash 位于查询参数中，按版本 URL 长期缓存
+              urlPattern: ({ url }) => url.pathname.endsWith('.glb'),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'model-assets',
+              },
+            },
+            {
               // JSON 数据：边用边更新（数据可能更新）
               urlPattern: /\.json$/,
               handler: 'StaleWhileRevalidate',

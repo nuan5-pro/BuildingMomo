@@ -168,7 +168,7 @@ export function useThreeModelManager(profile: ModelAssetProfile): ThreeModelMana
     if (cached) return cached
 
     const pending = runAssetLoadTask(async () => {
-      const result = await loadGLBModel(gltfLoader, profile, modelBaseUrl, meshPath, hash)
+      const result = await loadGLBModel(gltfLoader, modelBaseUrl, meshPath, hash)
       if (!result) return null
 
       return createMeshAssetData(result, meshPath, profile, (candidateMeshPath, textureName) =>

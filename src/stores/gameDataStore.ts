@@ -1,7 +1,5 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef, toRaw } from 'vue'
-import { createGLBCacheKey, sweepGLBCache } from '@/lib/glbCache'
-import type { ModelAssetProfile } from '@/types/furniture'
 import type {
   FurnitureItem,
   BuildingMomoFurniture,
@@ -21,8 +19,6 @@ const FURNITURE_DB_URL = import.meta.env.BASE_URL + 'assets/data/furniture_db.js
 const ICON_BASE_URL = import.meta.env.BASE_URL + 'assets/furniture-icon/'
 
 const LITE_TEXTURE_BASE_PATH = 'assets/furniture-model-lite/textures/'
-
-const MODEL_CACHE_PROFILES: ModelAssetProfile[] = ['lite', 'full']
 
 function normalizePublicAssetPath(assetPath: string): string {
   return assetPath.replace(/^\/+/, '')
@@ -77,29 +73,6 @@ export const useGameDataStore = defineStore('gameData', () => {
   const liteTextureManifestMeta = ref<FurnitureLiteTextureManifestMeta | null>(null)
   const liteTextureManifest = shallowRef<Map<string, string> | null>(null)
   const isLiteTextureManifestLoaded = ref(false)
-
-  function collectValidGLBCacheKeys(data: FurnitureDB): Set<string> {
-    const validKeys = new Set<string>()
-
-    for (const furniture of data.furniture) {
-      for (const mesh of furniture.meshes ?? []) {
-        if (typeof mesh.path !== 'string' || !mesh.path.trim()) continue
-
-        for (const profile of MODEL_CACHE_PROFILES) {
-          validKeys.add(createGLBCacheKey(profile, mesh.path))
-        }
-      }
-    }
-
-    return validKeys
-  }
-
-  async function cleanupStaleModelCache(data: FurnitureDB): Promise<void> {
-    const removedCount = await sweepGLBCache(collectValidGLBCacheKeys(data))
-    if (removedCount > 0) {
-      console.log(`[GameDataStore] Cleaned ${removedCount} stale model cache entries`)
-    }
-  }
 
   // ========== 数据加载 (Furniture) ==========
 
@@ -193,10 +166,6 @@ export const useGameDataStore = defineStore('gameData', () => {
       liteTextureManifest.value = null
       isLiteTextureManifestLoaded.value = false
       isFurnitureDBLoaded.value = true
-
-      void cleanupStaleModelCache(data).catch((error) => {
-        console.warn('[GameDataStore] Failed to clean stale model cache:', error)
-      })
     } catch (error) {
       if (import.meta.env.VITE_ENABLE_SECURE_MODE === 'true') {
         console.error('[GameDataStore] Failed to load furniture database:', error)
