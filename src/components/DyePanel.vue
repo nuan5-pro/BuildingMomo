@@ -8,6 +8,7 @@ import { useI18n } from '@/composables/useI18n'
 import { Button } from '@/components/ui/button'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import type { AppItem, GameColorMap } from '@/types/editor'
+import type { FurnitureCombinationColorPreset } from '@/types/furniture'
 import { decodeColorMapToGroupMap } from '@/lib/colorMap'
 
 interface ColorOption {
@@ -24,6 +25,12 @@ interface ColorGroup {
 interface GroupSelectionState {
   mode: 'disabled' | 'selected' | 'mixed'
   colorIndex: number | null
+}
+
+interface CombinationMatch {
+  items: AppItem[]
+  memberIndexes: number[]
+  presets: FurnitureCombinationColorPreset[]
 }
 
 const editorStore = useEditorStore()
@@ -53,6 +60,89 @@ const isMixedTypeSelection = computed(() => selectedTypeIds.value.length > 1)
 const currentTypeId = computed(() => {
   if (selectedTypeIds.value.length !== 1) return null
   return selectedTypeIds.value[0] ?? null
+})
+
+const combinationMatch = computed<CombinationMatch | null>(() => {
+  const scheme = editorStore.activeScheme
+  const selected = selectedItems.value
+  if (!scheme || selected.length < 2) return null
+
+  const groupId = selected[0]?.groupId ?? 0
+  if (groupId <= 0 || selected.some((item) => item.groupId !== groupId)) return null
+  const groupItems = scheme.items.value.filter((item) => item.groupId === groupId)
+  if (groupItems.length !== selected.length) return null
+
+  const itemCenter = groupItems.reduce<[number, number, number]>(
+    (center, item) => [center[0] + item.x, center[1] + item.y, center[2] + item.z],
+    [0, 0, 0]
+  )
+  itemCenter[0] /= groupItems.length
+  itemCenter[1] /= groupItems.length
+  itemCenter[2] /= groupItems.length
+  const itemDistance = (item: AppItem) =>
+    (item.x - itemCenter[0]) ** 2 + (item.y - itemCenter[1]) ** 2 + (item.z - itemCenter[2]) ** 2
+  const orderedItems = [...groupItems].sort(
+    (a, b) =>
+      a.gameId - b.gameId || itemDistance(a) - itemDistance(b) || a.instanceId - b.instanceId
+  )
+
+  const matches: CombinationMatch[] = []
+  for (const furniture of Object.values(gameDataStore.furnitureData)) {
+    const members = furniture.combination
+    const presets = furniture.combinationColorPresets
+    if (!members || members.length !== orderedItems.length || !presets?.length) continue
+
+    const memberCenter = members.reduce<[number, number, number]>(
+      (center, member) => [
+        center[0] + member.position[0],
+        center[1] + member.position[1],
+        center[2] + member.position[2],
+      ],
+      [0, 0, 0]
+    )
+    memberCenter[0] /= members.length
+    memberCenter[1] /= members.length
+    memberCenter[2] /= members.length
+    const memberDistance = (index: number) => {
+      const position = members[index]!.position
+      return (
+        (position[0] - memberCenter[0]) ** 2 +
+        (position[1] - memberCenter[1]) ** 2 +
+        (position[2] - memberCenter[2]) ** 2
+      )
+    }
+    const orderedMembers = members
+      .map((member, index) => ({ member, index }))
+      .sort(
+        (a, b) =>
+          a.member.itemId - b.member.itemId ||
+          memberDistance(a.index) - memberDistance(b.index) ||
+          a.index - b.index
+      )
+    if (orderedMembers.some(({ member }, index) => member.itemId !== orderedItems[index]?.gameId)) {
+      continue
+    }
+    const maxItemDistance = Math.max(...orderedItems.map(itemDistance))
+    const maxMemberDistance = Math.max(...orderedMembers.map(({ index }) => memberDistance(index)))
+    if (
+      orderedMembers.some(({ index }, orderIndex) => {
+        const itemRatio = maxItemDistance
+          ? itemDistance(orderedItems[orderIndex]!) / maxItemDistance
+          : 0
+        const memberRatio = maxMemberDistance ? memberDistance(index) / maxMemberDistance : 0
+        return Math.abs(itemRatio - memberRatio) > 1e-4
+      })
+    ) {
+      continue
+    }
+    matches.push({
+      items: orderedItems,
+      memberIndexes: orderedMembers.map(({ index }) => index),
+      presets,
+    })
+  }
+
+  return matches.length === 1 ? matches[0]! : null
 })
 
 const colorGroups = computed<ColorGroup[]>(() => {
@@ -110,6 +200,60 @@ function getColorIndexFromColorMap(
   const groupMap = decodeColorMapToGroupMap(colorMap)
   const colorIndex = groupMap.get(groupId)
   return typeof colorIndex === 'number' ? colorIndex : null
+}
+
+function areEffectiveColorMapsEqual(
+  left: GameColorMap | undefined,
+  right: GameColorMap | undefined
+): boolean {
+  const leftMap = decodeColorMapToGroupMap(left)
+  const rightMap = decodeColorMapToGroupMap(right)
+  if (leftMap.size !== rightMap.size) return false
+  return Array.from(leftMap).every(([groupId, colorIndex]) => rightMap.get(groupId) === colorIndex)
+}
+
+function isCombinationPresetActive(preset: FurnitureCombinationColorPreset): boolean {
+  const match = combinationMatch.value
+  if (!match) return false
+  return match.items.every((item, index) =>
+    areEffectiveColorMapsEqual(
+      item.extra.ColorMap,
+      preset.colorMaps[match.memberIndexes[index]!] ?? {}
+    )
+  )
+}
+
+function applyCombinationColorPreset(preset: FurnitureCombinationColorPreset) {
+  const scheme = editorStore.activeScheme
+  const match = combinationMatch.value
+  if (!scheme || !match || preset.colorMaps.length !== match.memberIndexes.length) return
+
+  const nextColorMaps = new Map<string, Record<string, number>>()
+  match.items.forEach((item, index) => {
+    nextColorMaps.set(item.internalId, preset.colorMaps[match.memberIndexes[index]!] ?? {})
+  })
+  if (
+    match.items.every((item) =>
+      areEffectiveColorMapsEqual(item.extra.ColorMap, nextColorMaps.get(item.internalId))
+    )
+  ) {
+    return
+  }
+
+  recordTransaction('dye.apply.combination', () => {
+    scheme.items.value = scheme.items.value.map((item) => {
+      const colorMap = nextColorMaps.get(item.internalId)
+      if (!colorMap) return item
+      return {
+        ...item,
+        extra: {
+          ...item.extra,
+          ColorMap: { ...colorMap },
+        },
+      }
+    })
+    editorStore.triggerSceneUpdate()
+  })
 }
 
 const groupSelectionStates = computed<Record<string, GroupSelectionState>>(() => {
@@ -361,6 +505,43 @@ function handleIconError(event: Event) {
           class="flex h-32 w-48 items-center justify-center rounded-md bg-secondary/40 px-3 text-center text-sm text-muted-foreground"
         >
           {{ t('dyePanel.noSelection') }}
+        </div>
+
+        <div v-else-if="combinationMatch" class="flex min-w-48 flex-col items-center gap-3">
+          <span class="text-xs font-medium text-foreground">
+            {{ t('dyePanel.combinationPresets') }}
+          </span>
+          <div class="flex flex-wrap justify-center gap-3">
+            <button
+              v-for="preset in combinationMatch.presets"
+              :key="preset.id"
+              type="button"
+              class="relative h-12 w-12 rounded-full transition-all hover:ring-2 hover:ring-muted-foreground/50 hover:ring-offset-1 hover:ring-offset-background"
+              :class="
+                isCombinationPresetActive(preset)
+                  ? 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                  : ''
+              "
+              :title="
+                preset.id === 0
+                  ? t('dyePanel.combinationDefault')
+                  : t('dyePanel.combinationPreset', { id: preset.id })
+              "
+              @click="applyCombinationColorPreset(preset)"
+            >
+              <span class="flex h-full w-full items-center justify-center rounded-full bg-muted/80">
+                <img
+                  :src="getColorIconUrl(preset.iconId)"
+                  alt=""
+                  class="h-9 w-9 object-contain"
+                  :class="
+                    preset.iconId === 0 ? 'opacity-50 invert dark:opacity-100 dark:invert-0' : ''
+                  "
+                  @error="handleIconError"
+                />
+              </span>
+            </button>
+          </div>
         </div>
 
         <div v-else-if="isMixedTypeSelection" class="flex flex-col items-center gap-3">

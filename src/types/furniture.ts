@@ -4,7 +4,7 @@
  * 原始家具条目：
  * [
  *   ItemID: number,
- *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, combination?]
+ *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, combination?, combination_colors?]
  * ]
  */
 export type RawFurnitureCombinationMember = [
@@ -12,6 +12,17 @@ export type RawFurnitureCombinationMember = [
   position: [x: number, y: number, z: number],
   rotation: [roll: number, pitch: number, yaw: number],
   scale: [x: number, y: number, z: number],
+]
+
+export type RawFurnitureCombinationColorMap = [
+  member_index: number,
+  colors: [area: number, scheme_id: number][],
+]
+
+export type RawFurnitureCombinationColorPreset = [
+  color_id: number,
+  icon_id: number,
+  member_colors: RawFurnitureCombinationColorMap[],
 ]
 
 export type RawFurnitureEntry = [
@@ -25,6 +36,7 @@ export type RawFurnitureEntry = [
     rot: [x: boolean, y: boolean],
     category_id: number,
     combination?: RawFurnitureCombinationMember[],
+    combination_colors?: RawFurnitureCombinationColorPreset[],
   ],
 ]
 
@@ -57,6 +69,13 @@ export interface FurnitureCombinationMember {
   scale: [number, number, number]
 }
 
+export interface FurnitureCombinationColorPreset {
+  id: number
+  iconId: number
+  /** 与 combination 成员下标对齐的游戏 ColorMap。 */
+  colorMaps: Record<string, number>[]
+}
+
 /** 家具物品信息（应用内部统一使用的结构） */
 export interface FurnitureItem {
   /** 中文名称 */
@@ -79,6 +98,8 @@ export interface FurnitureItem {
   categoryId: number
   /** 组合成员；存在时目录条目本身不作为家具摆放 */
   combination?: FurnitureCombinationMember[]
+  /** 该组合在游戏中定义的整组染色方案 */
+  combinationColorPresets?: FurnitureCombinationColorPreset[]
 }
 
 // ========== Furniture DB (模型配置) ==========

@@ -3,7 +3,10 @@ import { storeToRefs } from 'pinia'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorHistory } from './useEditorHistory'
 import type { AppItem } from '../../types/editor'
-import type { FurnitureCombinationMember } from '../../types/furniture'
+import type {
+  FurnitureCombinationColorPreset,
+  FurnitureCombinationMember,
+} from '../../types/furniture'
 
 // 生成简单的UUID
 function generateUUID(): string {
@@ -99,14 +102,21 @@ export function useEditorItemAdd() {
     return newItem
   }
 
-  function addFurnitureCombination(members: FurnitureCombinationMember[]): AppItem[] | null {
+  function addFurnitureCombination(
+    members: FurnitureCombinationMember[],
+    colorPreset?: FurnitureCombinationColorPreset
+  ): AppItem[] | null {
     const scheme = activeScheme.value
     if (!scheme || members.length === 0) return null
+    if (colorPreset && colorPreset.colorMaps.length !== members.length) {
+      console.warn('[EditorItemAdd] Combination color preset does not match its members')
+      return null
+    }
 
     const position = getAddPosition()
     const groupId = scheme.maxGroupId.value + 1
     let instanceId = scheme.maxInstanceId.value
-    const newItems = members.map((member): AppItem => {
+    const newItems = members.map((member, index): AppItem => {
       instanceId++
       return {
         internalId: generateUUID(),
@@ -125,7 +135,7 @@ export function useEditorItemAdd() {
           Scale: { X: member.scale[0], Y: member.scale[1], Z: member.scale[2] },
           AttachID: 0,
           TempInfo: {},
-          ColorMap: { '0': 0 },
+          ColorMap: colorPreset ? { ...colorPreset.colorMaps[index] } : { '0': 0 },
         },
       }
     })

@@ -116,6 +116,7 @@ const furnitureList = computed(() => {
       name: lang === 'zh' ? item.name_cn : item.name_en,
       icon: gameDataStore.getIconUrl(parseInt(id)),
       categoryId: item.categoryId,
+      colorPresets: item.combinationColorPresets,
     }))
     .sort((a, b) => a.id - b.id)
 })
@@ -140,16 +141,31 @@ const filteredItems = computed(() => {
 const totalCount = computed(() => furnitureList.value.length)
 
 // 添加家具
-function handleAddItem(itemId: number) {
+function handleAddItem(itemId: number, colorPresetId?: number) {
   if (!editorStore.activeScheme) return
 
-  const combination = gameDataStore.getFurniture(itemId)?.combination
+  const furniture = gameDataStore.getFurniture(itemId)
+  const combination = furniture?.combination
   if (combination) {
-    addFurnitureCombination(combination)
+    const colorPreset =
+      colorPresetId === undefined
+        ? furniture.combinationColorPresets?.find((preset) => preset.id === 0)
+        : furniture.combinationColorPresets?.find((preset) => preset.id === colorPresetId)
+    addFurnitureCombination(combination, colorPreset)
   } else {
     addFurnitureItem(itemId)
   }
   // 不关闭面板，方便连续添加
+}
+
+function getCombinationColorIconUrl(iconId: number): string {
+  return `${import.meta.env.BASE_URL}assets/colors/${iconId}.png`
+}
+
+function getCombinationColorLabel(colorId: number): string {
+  return colorId === 0
+    ? t('furnitureLibrary.combinationDefaultColor')
+    : t('furnitureLibrary.combinationColor', { id: colorId })
 }
 
 function close() {
@@ -300,24 +316,51 @@ function clearSearch() {
           <div
             class="grid grid-cols-3 gap-1 p-2 min-[480px]:grid-cols-4 min-[600px]:grid-cols-5 md:grid-cols-6"
           >
-            <button
+            <div
               v-for="item in filteredItems"
               :key="item.id"
-              class="flex min-w-0 flex-col items-center rounded-md p-1.5 transition-colors hover:bg-accent active:scale-95"
-              :title="item.name"
-              @click="handleAddItem(item.id)"
+              class="flex min-w-0 flex-col items-center rounded-md transition-colors hover:bg-accent"
             >
-              <img
-                :src="item.icon"
-                class="aspect-square w-full max-w-20 rounded border bg-muted object-cover"
-                :alt="item.name"
-                loading="lazy"
-                @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
-              />
-              <span class="mt-1 line-clamp-2 max-w-full text-center text-[11px] leading-tight">
-                {{ item.name }}
-              </span>
-            </button>
+              <button
+                type="button"
+                class="flex w-full min-w-0 flex-col items-center p-1.5 active:scale-95"
+                :title="item.name"
+                @click="handleAddItem(item.id)"
+              >
+                <img
+                  :src="item.icon"
+                  class="aspect-square w-full max-w-20 rounded border bg-muted object-cover"
+                  :alt="item.name"
+                  loading="lazy"
+                  @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
+                />
+                <span class="mt-1 line-clamp-2 max-w-full text-center text-[11px] leading-tight">
+                  {{ item.name }}
+                </span>
+              </button>
+              <div
+                v-if="item.colorPresets?.length"
+                class="flex flex-wrap justify-center gap-1 px-1 pb-1.5"
+              >
+                <button
+                  v-for="preset in item.colorPresets"
+                  :key="preset.id"
+                  type="button"
+                  class="h-5 w-5 rounded-full border border-border bg-background p-0.5 transition hover:ring-2 hover:ring-primary/60 focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="getCombinationColorLabel(preset.id)"
+                  :aria-label="`${item.name} · ${getCombinationColorLabel(preset.id)}`"
+                  @click="handleAddItem(item.id, preset.id)"
+                >
+                  <img
+                    :src="getCombinationColorIconUrl(preset.iconId)"
+                    class="h-full w-full rounded-full object-contain"
+                    :class="preset.iconId === 0 ? 'invert dark:invert-0' : ''"
+                    alt=""
+                    @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
+                  />
+                </button>
+              </div>
+            </div>
           </div>
 
           <!-- 空状态 -->

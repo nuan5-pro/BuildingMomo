@@ -768,6 +768,8 @@ export const zhLocale = {
     minorCategories: '家具分类',
     noResults: '未找到匹配的家具',
     stats: '共 {total} 个，显示 {showing} 个',
+    combinationDefaultColor: '默认配色',
+    combinationColor: '组合配色 {id}',
   },
 
   // 染色面板
@@ -779,5 +781,8 @@ export const zhLocale = {
     group: '区域{group}',
     disable: '禁用',
     mixed: '混合',
+    combinationPresets: '组合配色',
+    combinationDefault: '默认配色',
+    combinationPreset: '组合配色 {id}',
   },
 }

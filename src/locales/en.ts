@@ -783,6 +783,8 @@ export const enLocale = {
     minorCategories: 'Furniture categories',
     noResults: 'No matching furniture found',
     stats: '{showing} of {total} items',
+    combinationDefaultColor: 'Default combination color',
+    combinationColor: 'Combination color {id}',
   },
 
   // Dye Panel
@@ -794,5 +796,8 @@ export const enLocale = {
     group: 'Area {group}',
     disable: 'Disable',
     mixed: 'Mixed',
+    combinationPresets: 'Combination colors',
+    combinationDefault: 'Default color',
+    combinationPreset: 'Combination color {id}',
   },
 }

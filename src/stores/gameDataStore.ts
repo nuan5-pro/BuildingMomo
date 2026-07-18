@@ -8,6 +8,8 @@ import type {
   FurnitureModelConfig,
   FurnitureLiteTextureManifestMeta,
   FurnitureLiteTextureManifestFile,
+  RawFurnitureCombinationColorPreset,
+  FurnitureCombinationColorPreset,
 } from '../types/furniture'
 
 // 远程数据源 (Build time fetched)
@@ -60,6 +62,69 @@ function buildLiteTextureManifestKey(meshPath: string, textureName: string): str
   return `${normalizeManifestMeshPath(meshPath)}::${textureName.trim()}`
 }
 
+function normalizeCombinationColorPresets(
+  memberCount: number,
+  rawPresets: RawFurnitureCombinationColorPreset[] | undefined
+): FurnitureCombinationColorPreset[] | undefined {
+  if (!rawPresets) return undefined
+
+  const presets: FurnitureCombinationColorPreset[] = []
+  const presetIds = new Set<number>()
+  for (const [id, iconId, rawMemberColors] of rawPresets) {
+    if (
+      !Number.isSafeInteger(id) ||
+      id < 0 ||
+      presetIds.has(id) ||
+      !Number.isSafeInteger(iconId) ||
+      iconId < 0 ||
+      !Array.isArray(rawMemberColors)
+    ) {
+      continue
+    }
+
+    const colorMaps = Array.from({ length: memberCount }, () => ({}) as Record<string, number>)
+    const memberIndexes = new Set<number>()
+    let valid = true
+    for (const [memberIndex, rawColors] of rawMemberColors) {
+      if (
+        !Number.isSafeInteger(memberIndex) ||
+        memberIndex < 0 ||
+        memberIndex >= memberCount ||
+        memberIndexes.has(memberIndex) ||
+        !Array.isArray(rawColors)
+      ) {
+        valid = false
+        break
+      }
+
+      const colorMap: Record<string, number> = {}
+      for (const [area, schemeId] of rawColors) {
+        if (
+          !Number.isSafeInteger(area) ||
+          area < 0 ||
+          !Number.isSafeInteger(schemeId) ||
+          schemeId < 0 ||
+          Math.trunc(schemeId / 10) !== area ||
+          String(area) in colorMap
+        ) {
+          valid = false
+          break
+        }
+        colorMap[String(area)] = schemeId
+      }
+      if (!valid) break
+      memberIndexes.add(memberIndex)
+      colorMaps[memberIndex] = colorMap
+    }
+
+    if (!valid) continue
+    presetIds.add(id)
+    presets.push({ id, iconId, colorMaps })
+  }
+
+  return presets.length ? presets.sort((a, b) => a.id - b.id) : undefined
+}
+
 export const useGameDataStore = defineStore('gameData', () => {
   // ========== 状态 (Furniture) ==========
   const furnitureData = ref<Record<string, FurnitureItem>>({})
@@ -106,7 +171,17 @@ export const useGameDataStore = defineStore('gameData', () => {
 
     for (const [
       itemId,
-      [nameZh, nameEn, iconId, dim, scaleRange, rot, categoryId, rawCombination],
+      [
+        nameZh,
+        nameEn,
+        iconId,
+        dim,
+        scaleRange,
+        rot,
+        categoryId,
+        rawCombination,
+        rawCombinationColors,
+      ],
     ] of json.d) {
       const size: [number, number, number] =
         Array.isArray(dim) && dim.length === 3 ? (dim as [number, number, number]) : [100, 100, 150]
@@ -123,6 +198,12 @@ export const useGameDataStore = defineStore('gameData', () => {
         throw new Error(`Furniture ${itemId} references unknown category ${categoryId}`)
       }
 
+      const combination = rawCombination?.map(([memberItemId, position, rotation, scale]) => ({
+        itemId: memberItemId,
+        position,
+        rotation,
+        scale,
+      }))
       furniture[itemId.toString()] = {
         name_cn: String(nameZh ?? ''),
         name_en: String(nameEn ?? ''),
@@ -135,12 +216,10 @@ export const useGameDataStore = defineStore('gameData', () => {
           z: true,
         },
         categoryId,
-        combination: rawCombination?.map(([memberItemId, position, rotation, scale]) => ({
-          itemId: memberItemId,
-          position,
-          rotation,
-          scale,
-        })),
+        combination,
+        combinationColorPresets: combination
+          ? normalizeCombinationColorPresets(combination.length, rawCombinationColors)
+          : undefined,
       }
     }
 
