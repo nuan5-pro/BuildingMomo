@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { LayoutGrid, Search, X } from 'lucide-vue-next'
 import type { FurnitureCategory } from '@/types/furniture'
+import PinyinMatch from 'pinyin-match'
 
 const gameDataStore = useGameDataStore()
 const editorStore = useEditorStore()
@@ -126,7 +127,10 @@ const filteredItems = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
   if (query) {
     return furnitureList.value.filter(
-      (item) => item.name.toLowerCase().includes(query) || item.id.toString().includes(query)
+      (item) =>
+        item.name.toLowerCase().includes(query) ||
+        item.id.toString().includes(query) ||
+        (locale.value === 'zh' && PinyinMatch.match(item.name, query))
     )
   }
 

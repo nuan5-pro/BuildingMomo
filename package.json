@@ -30,6 +30,7 @@
     "idb-keyval": "^6.2.2",
     "lucide-vue-next": "^0.575.0",
     "pinia": "^3.0.4",
+    "pinyin-match": "^1.2.10",
     "reka-ui": "^2.8.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.0",

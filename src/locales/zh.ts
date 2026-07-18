@@ -761,7 +761,7 @@ export const zhLocale = {
   // 家具背包
   furnitureLibrary: {
     title: '家具背包',
-    searchPlaceholder: '搜索家具...',
+    searchPlaceholder: '搜索家具 (支持拼音 / 首字母)...',
     searchResults: '搜索结果',
     all: '全部',
     majorCategories: '家具大类',
