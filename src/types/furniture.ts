@@ -4,9 +4,16 @@
  * 原始家具条目：
  * [
  *   ItemID: number,
- *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number]
+ *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, combination?]
  * ]
  */
+export type RawFurnitureCombinationMember = [
+  item_id: number,
+  position: [x: number, y: number, z: number],
+  rotation: [roll: number, pitch: number, yaw: number],
+  scale: [x: number, y: number, z: number],
+]
+
 export type RawFurnitureEntry = [
   number,
   [
@@ -17,6 +24,7 @@ export type RawFurnitureEntry = [
     scale: [min: number, max: number],
     rot: [x: boolean, y: boolean],
     category_id: number,
+    combination?: RawFurnitureCombinationMember[],
   ],
 ]
 
@@ -42,6 +50,13 @@ export interface FurnitureCategory {
   parentId: number | null
 }
 
+export interface FurnitureCombinationMember {
+  itemId: number
+  position: [number, number, number]
+  rotation: [roll: number, pitch: number, yaw: number]
+  scale: [number, number, number]
+}
+
 /** 家具物品信息（应用内部统一使用的结构） */
 export interface FurnitureItem {
   /** 中文名称 */
@@ -62,6 +77,8 @@ export interface FurnitureItem {
   }
   /** 家具小分类 ID */
   categoryId: number
+  /** 组合成员；存在时目录条目本身不作为家具摆放 */
+  combination?: FurnitureCombinationMember[]
 }
 
 // ========== Furniture DB (模型配置) ==========

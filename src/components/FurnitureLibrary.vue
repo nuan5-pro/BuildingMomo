@@ -13,7 +13,7 @@ import type { FurnitureCategory } from '@/types/furniture'
 
 const gameDataStore = useGameDataStore()
 const editorStore = useEditorStore()
-const { addFurnitureItem } = useEditorItemAdd()
+const { addFurnitureItem, addFurnitureCombination } = useEditorItemAdd()
 const { t, locale } = useI18n()
 
 // 控制显示
@@ -143,7 +143,12 @@ const totalCount = computed(() => furnitureList.value.length)
 function handleAddItem(itemId: number) {
   if (!editorStore.activeScheme) return
 
-  addFurnitureItem(itemId)
+  const combination = gameDataStore.getFurniture(itemId)?.combination
+  if (combination) {
+    addFurnitureCombination(combination)
+  } else {
+    addFurnitureItem(itemId)
+  }
   // 不关闭面板，方便连续添加
 }
 

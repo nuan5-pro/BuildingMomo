@@ -96,7 +96,7 @@ async function main() {
     )
 
     // Extract icon IDs
-    // Structure: { v, c, d: [[id, [name_zh, name_en, icon_id, dim, scale, rot, category_id]] ...] }
+    // Structure: { v, c, d: [[id, [name_zh, name_en, icon_id, dim, scale, rot, category_id, combination?]] ...] }
     const items = jsonData.d || []
     const iconIds = new Set()
 

@@ -104,7 +104,10 @@ export const useGameDataStore = defineStore('gameData', () => {
       }
     }
 
-    for (const [itemId, [nameZh, nameEn, iconId, dim, scaleRange, rot, categoryId]] of json.d) {
+    for (const [
+      itemId,
+      [nameZh, nameEn, iconId, dim, scaleRange, rot, categoryId, rawCombination],
+    ] of json.d) {
       const size: [number, number, number] =
         Array.isArray(dim) && dim.length === 3 ? (dim as [number, number, number]) : [100, 100, 150]
 
@@ -132,6 +135,12 @@ export const useGameDataStore = defineStore('gameData', () => {
           z: true,
         },
         categoryId,
+        combination: rawCombination?.map(([memberItemId, position, rotation, scale]) => ({
+          itemId: memberItemId,
+          position,
+          rotation,
+          scale,
+        })),
       }
     }
 

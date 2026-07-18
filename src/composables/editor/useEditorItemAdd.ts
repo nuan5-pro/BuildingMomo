@@ -3,6 +3,7 @@ import { storeToRefs } from 'pinia'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorHistory } from './useEditorHistory'
 import type { AppItem } from '../../types/editor'
+import type { FurnitureCombinationMember } from '../../types/furniture'
 
 // 生成简单的UUID
 function generateUUID(): string {
@@ -15,6 +16,19 @@ function generateUUID(): string {
 
 // 位置获取函数（由 ThreeEditor 注册）- 单例模式，所有调用共享同一个 ref
 const getAddPositionFn = ref<(() => [number, number, number] | null) | null>(null)
+
+function getAddPosition(): [number, number, number] {
+  if (!getAddPositionFn.value) {
+    console.warn('[EditorItemAdd] Position function not registered, using default')
+    return [0, 0, 0]
+  }
+
+  const position = getAddPositionFn.value()
+  if (position) return position
+
+  console.warn('[EditorItemAdd] Raycast failed, using fallback position')
+  return [0, 0, 0]
+}
 
 /**
  * 添加物品到场景的 Composable
@@ -41,22 +55,7 @@ export function useEditorItemAdd() {
     }
 
     // 1. 获取添加位置（屏幕中心射线检测结果）
-    let position: [number, number, number]
-
-    if (getAddPositionFn.value) {
-      const hitPosition = getAddPositionFn.value()
-      if (hitPosition) {
-        position = hitPosition
-      } else {
-        // 射线检测失败：使用视野中心，Z=0（地面）
-        console.warn('[EditorItemAdd] Raycast failed, using fallback position')
-        position = [0, 0, 0]
-      }
-    } else {
-      // 位置函数未注册：使用默认位置
-      console.warn('[EditorItemAdd] Position function not registered, using default')
-      position = [0, 0, 0]
-    }
+    const position = getAddPosition()
 
     // 2. 分配 Instance ID
     const instanceId = ++scheme.maxInstanceId.value
@@ -100,8 +99,52 @@ export function useEditorItemAdd() {
     return newItem
   }
 
+  function addFurnitureCombination(members: FurnitureCombinationMember[]): AppItem[] | null {
+    const scheme = activeScheme.value
+    if (!scheme || members.length === 0) return null
+
+    const position = getAddPosition()
+    const groupId = scheme.maxGroupId.value + 1
+    let instanceId = scheme.maxInstanceId.value
+    const newItems = members.map((member): AppItem => {
+      instanceId++
+      return {
+        internalId: generateUUID(),
+        gameId: member.itemId,
+        instanceId,
+        x: position[0] + member.position[0],
+        y: position[1] + member.position[1],
+        z: position[2] + member.position[2],
+        rotation: {
+          x: member.rotation[0],
+          y: member.rotation[1],
+          z: member.rotation[2],
+        },
+        groupId,
+        extra: {
+          Scale: { X: member.scale[0], Y: member.scale[1], Z: member.scale[2] },
+          AttachID: 0,
+          TempInfo: {},
+          ColorMap: { '0': 0 },
+        },
+      }
+    })
+
+    recordTransaction('item.add.combination', () => {
+      scheme.items.value = [...scheme.items.value, ...newItems]
+      scheme.maxInstanceId.value = instanceId
+      scheme.maxGroupId.value = groupId
+      scheme.selectedItemIds.value = new Set(newItems.map((item) => item.internalId))
+      editorStore.triggerSceneUpdate()
+      editorStore.triggerSelectionUpdate()
+    })
+
+    return newItems
+  }
+
   return {
     addFurnitureItem,
+    addFurnitureCombination,
     getAddPositionFn,
   }
 }
