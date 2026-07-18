@@ -777,6 +777,10 @@ export const enLocale = {
   furnitureLibrary: {
     title: 'Furniture Library',
     searchPlaceholder: 'Search furniture...',
+    searchResults: 'Search Results',
+    all: 'All',
+    majorCategories: 'Furniture sections',
+    minorCategories: 'Furniture categories',
     noResults: 'No matching furniture found',
     stats: '{showing} of {total} items',
   },

@@ -4,7 +4,7 @@
  * 原始家具条目：
  * [
  *   ItemID: number,
- *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y]]
+ *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number]
  * ]
  */
 export type RawFurnitureEntry = [
@@ -16,23 +16,30 @@ export type RawFurnitureEntry = [
     dim: [number, number, number],
     scale: [min: number, max: number],
     rot: [x: boolean, y: boolean],
+    category_id: number,
   ],
+]
+
+export type RawFurnitureCategory = [
+  name_zh: string,
+  name_en: string,
+  icon_id: number,
+  parent_id?: number,
 ]
 
 /** 远程数据格式 */
 export interface BuildingMomoFurniture {
   v: string
-  /**
-   * 远程数据格式：
-   * {
-   *   "v": "20251115",
-   *   "d": [
-   *     [1170000817, ["流转之柱・家园", "Warp Spire: Home", 1885877145, [169.5, 142.4, 368.1]]],
-   *     ...
-   *   ]
-   * }
-   */
+  c: Record<string, RawFurnitureCategory>
   d: RawFurnitureEntry[]
+}
+
+export interface FurnitureCategory {
+  id: number
+  name_cn: string
+  name_en: string
+  iconId: number
+  parentId: number | null
 }
 
 /** 家具物品信息（应用内部统一使用的结构） */
@@ -53,6 +60,8 @@ export interface FurnitureItem {
     y: boolean
     z: boolean
   }
+  /** 家具小分类 ID */
+  categoryId: number
 }
 
 // ========== Furniture DB (模型配置) ==========
