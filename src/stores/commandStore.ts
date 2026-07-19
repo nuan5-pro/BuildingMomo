@@ -311,16 +311,7 @@ export const useCommandStore = defineStore('command', () => {
       label: t('command.tool.toggleDyePanel'),
       shortcut: 'C',
       category: 'tool',
-      enabled: () => {
-        if (import.meta.env.VITE_ENABLE_SECURE_MODE !== 'true') {
-          return false
-        }
-
-        const settingsStore = useSettingsStore()
-        if (!settingsStore.isAuthenticated) return false
-
-        return editorStore.activeScheme !== null
-      },
+      enabled: () => editorStore.activeScheme !== null,
       execute: () => {
         console.log('[Command] 切换染色面板')
         const shouldOpen = !showDyePanel.value

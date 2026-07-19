@@ -148,8 +148,7 @@ const combinationMatch = computed<CombinationMatch | null>(() => {
 const colorGroups = computed<ColorGroup[]>(() => {
   if (currentTypeId.value === null) return []
 
-  const modelConfig = gameDataStore.getFurnitureModelConfig(currentTypeId.value)
-  const colors = modelConfig?.colors
+  const colors = gameDataStore.getFurniture(currentTypeId.value)?.colors
   if (!colors) return []
 
   return Object.entries(colors)
@@ -427,9 +426,8 @@ function resetAllSelectedColors() {
         return item
       }
 
-      // 根据每个物体自己的模型配置，决定是简单模式还是多组模式
-      const modelConfig = gameDataStore.getFurnitureModelConfig(item.gameId)
-      const colors = modelConfig?.colors
+      // 根据每个物体自己的染色配置，决定是简单模式还是多组模式
+      const colors = gameDataStore.getFurniture(item.gameId)?.colors
       if (!colors) {
         // 不支持染色的物体保持不变
         return item

@@ -4,9 +4,19 @@
  * 原始家具条目：
  * [
  *   ItemID: number,
- *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, combination?, combination_colors?]
+ *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, colors, combination, combination_colors]
  * ]
  */
+export interface FurnitureColorEntry {
+  /** 显示图标 ID（UI 色块用） */
+  idx: number
+  /** 每项为 [meshIdx, pattern, tint]。 */
+  cfg: [meshIdx: number, pattern: number, tint: number][]
+}
+
+/** 染色配置：groupId -> (colorIndex -> 变体配置) */
+export type FurnitureColorConfig = Record<number, Record<number, FurnitureColorEntry>>
+
 export type RawFurnitureCombinationMember = [
   item_id: number,
   position: [x: number, y: number, z: number],
@@ -35,8 +45,9 @@ export type RawFurnitureEntry = [
     scale: [min: number, max: number],
     rot: [x: boolean, y: boolean],
     category_id: number,
-    combination?: RawFurnitureCombinationMember[],
-    combination_colors?: RawFurnitureCombinationColorPreset[],
+    colors: FurnitureColorConfig | null,
+    combination: RawFurnitureCombinationMember[] | null,
+    combination_colors: RawFurnitureCombinationColorPreset[] | null,
   ],
 ]
 
@@ -96,6 +107,8 @@ export interface FurnitureItem {
   }
   /** 家具小分类 ID */
   categoryId: number
+  /** 家具染色渲染配置 */
+  colors?: FurnitureColorConfig
   /** 组合成员；存在时目录条目本身不作为家具摆放 */
   combination?: FurnitureCombinationMember[]
   /** 该组合在游戏中定义的整组染色方案 */
@@ -129,22 +142,6 @@ export interface FurnitureMeshConfig {
   hashes: FurnitureMeshHashes
 }
 
-/** 单个染色变体的渲染配置 */
-export interface FurnitureColorEntry {
-  /** 显示图标 ID（UI 色块用） */
-  idx: number
-  /**
-   * 材质赋值列表：每项 [meshIdx, pattern, tint]
-   * - meshIdx: 目标源 mesh 索引（对应 config.meshes 的下标）
-   * - pattern: D/N/O 贴图变体索引（对应 matName_D{pattern} / _N{pattern} / _O{pattern}）
-   * - tint:    T 调色板变体索引（对应 matName_T{tint}）
-   */
-  cfg: [meshIdx: number, pattern: number, tint: number][]
-}
-
-/** 染色配置：groupId -> (colorIndex -> 变体配置) */
-export type FurnitureColorConfig = Record<number, Record<number, FurnitureColorEntry>>
-
 /** 家具模型配置 */
 export interface FurnitureModelConfig {
   id: number
@@ -154,7 +151,6 @@ export interface FurnitureModelConfig {
   root_offset: { x: number; y: number; z: number }
   scale_range?: [number, number]
   rotate_axis?: [boolean, boolean]
-  colors?: FurnitureColorConfig
   price?: number
 }
 

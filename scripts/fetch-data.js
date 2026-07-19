@@ -13,7 +13,6 @@ const ICON_BASE_URL = 'https://nuan5.pro/assets/furniture-icon/'
 const PUBLIC_DIR = path.resolve(__dirname, '../public')
 const DATA_DIR = path.join(PUBLIC_DIR, 'assets/data')
 const ICON_DIR = path.join(PUBLIC_DIR, 'assets/furniture-icon')
-const COLOR_ICON_DIR = path.join(PUBLIC_DIR, 'assets/colors')
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) {
@@ -97,7 +96,7 @@ async function main() {
     )
 
     // Extract icon IDs
-    // Structure: { v, c, d: [[id, [name_zh, name_en, icon_id, dim, scale, rot, category_id, combination?, combination_colors?]] ...] }
+    // Structure: { v, c, d: [[id, [name_zh, name_en, icon_id, dim, scale, rot, category_id, colors, combination, combination_colors]] ...] }
     const items = jsonData.d || []
     const iconIds = new Set()
 

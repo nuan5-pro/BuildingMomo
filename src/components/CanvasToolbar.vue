@@ -36,8 +36,6 @@ const commandStore = useCommandStore()
 const settingsStore = useSettingsStore()
 const { t } = useI18n()
 
-const isSecureModeEnabled = import.meta.env.VITE_ENABLE_SECURE_MODE === 'true'
-
 /**
  * 格式化修饰键字符串为显示格式
  * @param key 键位定义（如 'shift', 'shift+alt'）
@@ -297,7 +295,7 @@ const showDyePanel = computed({
       </Tooltip>
 
       <!-- 6. 染色面板 Toggle -->
-      <Tooltip v-if="isSecureModeEnabled && settingsStore.isAuthenticated">
+      <Tooltip>
         <TooltipTrigger as-child>
           <div class="inline-flex">
             <Toggle size="sm" v-model="showDyePanel">

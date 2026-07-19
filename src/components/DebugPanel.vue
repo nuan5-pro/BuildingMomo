@@ -82,7 +82,7 @@ const modelDebugInfo = computed(() => {
           .join(', ')
       : 'N/A'
 
-  const dyePlan = resolveModelDyePlan({ item, colorsConfig: config?.colors })
+  const dyePlan = resolveModelDyePlan({ item, colorsConfig: furniture?.colors })
   const dyeEntries =
     dyePlan.mode === 'dyed' ? Array.from(dyePlan.dyeMap.entries()).sort(([a], [b]) => a - b) : []
   const meshKey = buildModelMeshKey(item.gameId, dyePlan)

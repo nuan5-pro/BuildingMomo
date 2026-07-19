@@ -64,7 +64,7 @@ function buildLiteTextureManifestKey(meshPath: string, textureName: string): str
 
 function normalizeCombinationColorPresets(
   memberCount: number,
-  rawPresets: RawFurnitureCombinationColorPreset[] | undefined
+  rawPresets: RawFurnitureCombinationColorPreset[] | null
 ): FurnitureCombinationColorPreset[] | undefined {
   if (!rawPresets) return undefined
 
@@ -179,6 +179,7 @@ export const useGameDataStore = defineStore('gameData', () => {
         scaleRange,
         rot,
         categoryId,
+        colors,
         rawCombination,
         rawCombinationColors,
       ],
@@ -216,6 +217,7 @@ export const useGameDataStore = defineStore('gameData', () => {
           z: true,
         },
         categoryId,
+        colors: colors ?? undefined,
         combination,
         combinationColorPresets: combination
           ? normalizeCombinationColorPresets(combination.length, rawCombinationColors)
