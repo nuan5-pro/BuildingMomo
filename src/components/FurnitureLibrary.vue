@@ -28,6 +28,7 @@ const searchQuery = ref('')
 const selectedMajorId = ref<number | null>(null)
 const selectedMinorId = ref<number | null>(null)
 const furnitureScrollRef = ref<InstanceType<typeof ScrollArea> | null>(null)
+const minorCategoryScrollRef = ref<InstanceType<typeof ScrollArea> | null>(null)
 const furnitureScrollPositions = new Map<string, number>()
 
 const categoryList = computed(() =>
@@ -73,6 +74,24 @@ const furnitureScrollKey = computed(() => {
 
 function getFurnitureScrollViewport(): HTMLElement | null {
   return furnitureScrollRef.value?.$el?.querySelector('[data-slot="scroll-area-viewport"]') ?? null
+}
+
+function getMinorCategoryScrollViewport(): HTMLElement | null {
+  return (
+    minorCategoryScrollRef.value?.$el?.querySelector('[data-slot="scroll-area-viewport"]') ?? null
+  )
+}
+
+function handleMinorCategoryWheel(event: WheelEvent) {
+  // Shift 保留浏览器原生的横向滚动行为。
+  if (event.shiftKey) return
+
+  const viewport = getMinorCategoryScrollViewport()
+  // 未溢出时不拦截滚轮，让事件按默认方式继续处理。
+  if (!viewport || viewport.scrollWidth <= viewport.clientWidth || event.deltaY === 0) return
+
+  event.preventDefault()
+  viewport.scrollLeft += event.deltaY
 }
 
 watch(furnitureScrollKey, async (key, previousKey) => {
@@ -311,7 +330,11 @@ function clearSearch() {
             class="flex h-11 items-center"
             :aria-label="t('furnitureLibrary.minorCategories')"
           >
-            <ScrollArea class="h-full min-w-0 flex-1 whitespace-nowrap">
+            <ScrollArea
+              ref="minorCategoryScrollRef"
+              class="h-full min-w-0 flex-1 whitespace-nowrap"
+              @wheel.capture="handleMinorCategoryWheel"
+            >
               <div class="flex h-full w-max items-center gap-0.5 px-2">
                 <Tooltip>
                   <TooltipTrigger as-child>
