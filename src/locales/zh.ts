@@ -770,6 +770,8 @@ export const zhLocale = {
     stats: '共 {total} 个，显示 {showing} 个',
     combinationDefaultColor: '默认配色',
     combinationColor: '组合配色 {id}',
+    expand: '展开面板',
+    collapse: '收起面板',
   },
 
   // 染色面板

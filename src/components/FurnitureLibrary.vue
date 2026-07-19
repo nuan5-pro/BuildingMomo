@@ -8,7 +8,8 @@ import { useI18n } from '@/composables/useI18n'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { LayoutGrid, Search, X } from 'lucide-vue-next'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { LayoutGrid, Maximize2, Minimize2, Search, X } from 'lucide-vue-next'
 import type { FurnitureCategory } from '@/types/furniture'
 import PinyinMatch from 'pinyin-match'
 
@@ -19,6 +20,9 @@ const { t, locale } = useI18n()
 
 // 控制显示
 const isVisible = defineModel<boolean>('open', { default: false })
+
+// Panel width expand/collapse state
+const isExpanded = ref(false)
 
 const searchQuery = ref('')
 const selectedMajorId = ref<number | null>(null)
@@ -142,8 +146,6 @@ const filteredItems = computed(() => {
   return furnitureList.value.filter((item) => categoryIds.has(item.categoryId))
 })
 
-const totalCount = computed(() => furnitureList.value.length)
-
 // 添加家具
 function handleAddItem(itemId: number, colorPresetId?: number) {
   if (!editorStore.activeScheme) return
@@ -197,193 +199,275 @@ function clearSearch() {
   <!-- 悬浮在画布左上角 -->
   <div
     v-show="isVisible"
-    class="absolute inset-y-4 left-4 z-50 flex w-[calc(100%-2rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background/90 shadow-2xl backdrop-blur-md"
+    class="furniture-library-container absolute top-4 bottom-18 left-4 z-50 flex w-[calc(100%-2rem)] flex-col overflow-hidden rounded-md border border-border bg-muted/90 shadow-2xl transition-[max-width] duration-300 ease-in-out"
+    :class="isExpanded ? 'max-w-none' : 'max-w-xl'"
   >
-    <!-- 顶部搜索栏 -->
-    <div class="flex items-center gap-2 border-b p-2">
-      <div class="relative min-w-0 flex-1">
-        <Search
-          class="absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          v-model="searchQuery"
-          :placeholder="t('furnitureLibrary.searchPlaceholder')"
-          class="h-8 pr-8 pl-7 text-xs"
-          autofocus
-        />
-        <Button
-          v-if="searchQuery.trim()"
-          variant="ghost"
-          size="icon"
-          class="absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          @click="clearSearch"
-        >
-          <X class="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-7 w-7 shrink-0"
-        :aria-label="t('common.close')"
-        @click="close"
-      >
-        <X class="h-4 w-4" />
-      </Button>
-    </div>
-
-    <div class="flex min-h-0 flex-1">
-      <!-- 游戏中的左侧大类栏 -->
-      <nav
-        class="w-14 shrink-0 border-r bg-muted/35"
-        :aria-label="t('furnitureLibrary.majorCategories')"
-      >
-        <ScrollArea class="h-full">
-          <div class="flex flex-col items-center gap-1.5 p-1.5">
+    <TooltipProvider :delay-duration="600">
+      <!-- 顶部搜索栏 -->
+      <div class="flex items-center gap-2 p-2 pl-14">
+        <div class="relative min-w-0 flex-1">
+          <Search
+            class="absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            v-model="searchQuery"
+            :placeholder="t('furnitureLibrary.searchPlaceholder')"
+            class="h-8 rounded-md border-none bg-background pr-8 pl-7 text-xs shadow-none"
+            autofocus
+          />
+          <Tooltip v-if="searchQuery.trim()">
+            <TooltipTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                @click="clearSearch"
+              >
+                <X class="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" class="pointer-events-none text-xs">
+              {{ locale === 'zh' ? '清除搜索' : 'Clear search' }}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <!-- Expand / Collapse Toggle Button -->
+        <Tooltip>
+          <TooltipTrigger as-child>
             <button
-              v-for="category in majorCategories"
-              :key="category.id"
               type="button"
-              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md transition-all hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-              :class="
-                activeMajorId === category.id
-                  ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary'
-                  : 'text-foreground/70'
+              class="group hidden h-8 w-8 shrink-0 cursor-default items-center justify-center bg-transparent focus-visible:outline-none sm:flex"
+              :aria-label="
+                isExpanded ? t('furnitureLibrary.collapse') : t('furnitureLibrary.expand')
               "
-              :title="getCategoryName(category)"
-              :aria-label="getCategoryName(category)"
-              :aria-pressed="activeMajorId === category.id"
-              @click="selectMajor(category.id)"
+              @click="isExpanded = !isExpanded"
             >
-              <span class="h-8 w-8" :style="getCategoryIconStyle(category.id)" />
+              <div
+                class="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-all duration-200 group-hover:bg-accent group-hover:text-foreground"
+              >
+                <Minimize2 v-if="isExpanded" class="h-4 w-4" />
+                <Maximize2 v-else class="h-4 w-4" />
+              </div>
             </button>
-          </div>
-          <ScrollBar orientation="vertical" class="!w-1.5" />
-        </ScrollArea>
-      </nav>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" class="pointer-events-none text-xs">
+            {{ isExpanded ? t('furnitureLibrary.collapse') : t('furnitureLibrary.expand') }}
+          </TooltipContent>
+        </Tooltip>
 
-      <div class="flex min-w-0 flex-1 flex-col">
-        <!-- 游戏中的顶部小类栏；“全部”是每个大类下的合并视图 -->
-        <nav
-          v-if="!searchQuery.trim()"
-          class="flex items-center border-b bg-muted/20"
-          :aria-label="t('furnitureLibrary.minorCategories')"
+        <button
+          type="button"
+          class="group flex h-8 w-8 shrink-0 cursor-default items-center justify-center bg-transparent focus-visible:outline-none"
+          :aria-label="t('common.close')"
+          @click="close"
         >
-          <ScrollArea class="min-w-0 flex-1 whitespace-nowrap">
-            <div class="flex w-max gap-1 px-2 py-1.5">
-              <button
-                type="button"
-                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                :class="
-                  selectedMinorId === null
-                    ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary'
-                    : ''
-                "
-                :title="t('furnitureLibrary.all')"
-                :aria-label="t('furnitureLibrary.all')"
-                :aria-pressed="selectedMinorId === null"
-                @click="selectMinor(null)"
-              >
-                <LayoutGrid class="h-6 w-6" />
-              </button>
-
-              <button
-                v-for="category in minorCategories"
-                :key="category.id"
-                type="button"
-                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-foreground/70 transition-all hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                :class="
-                  selectedMinorId === category.id
-                    ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary'
-                    : ''
-                "
-                :title="getCategoryName(category)"
-                :aria-label="getCategoryName(category)"
-                :aria-pressed="selectedMinorId === category.id"
-                @click="selectMinor(category.id)"
-              >
-                <span class="h-8 w-8" :style="getCategoryIconStyle(category.id)" />
-              </button>
-            </div>
-            <ScrollBar orientation="horizontal" class="!h-1.5" />
-          </ScrollArea>
           <div
-            class="max-w-32 shrink-0 truncate border-l px-3 text-sm font-semibold text-foreground sm:max-w-56"
-            :title="classificationLabel"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-all duration-200 group-hover:bg-accent group-hover:text-foreground"
           >
-            {{ classificationLabel }}
+            <X class="h-4 w-4" />
           </div>
+        </button>
+      </div>
+
+      <div class="flex min-h-0 flex-1">
+        <!-- 游戏中的左侧大类栏 -->
+        <nav class="w-14 shrink-0" :aria-label="t('furnitureLibrary.majorCategories')">
+          <ScrollArea class="h-full">
+            <div class="flex flex-col items-center pb-2">
+              <Tooltip v-for="category in majorCategories" :key="category.id">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group flex h-11 w-full cursor-default items-center justify-center bg-transparent focus-visible:outline-none"
+                    :aria-label="getCategoryName(category)"
+                    :aria-pressed="activeMajorId === category.id"
+                    @click="selectMajor(category.id)"
+                  >
+                    <div
+                      class="flex h-8 w-8 items-center justify-center rounded-md transition-all duration-200"
+                      :class="
+                        activeMajorId === category.id
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-foreground/70 group-hover:bg-accent group-hover:text-foreground'
+                      "
+                    >
+                      <span class="h-6 w-6" :style="getCategoryIconStyle(category.id)" />
+                    </div>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" :side-offset="-8" class="pointer-events-none text-xs">
+                  {{ getCategoryName(category) }}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <ScrollBar orientation="vertical" class="!w-1.5" />
+          </ScrollArea>
         </nav>
 
-        <!-- 家具网格（可滚动） -->
-        <ScrollArea ref="furnitureScrollRef" class="min-h-0 flex-1">
-          <div
-            class="grid grid-cols-3 gap-1 p-2 min-[480px]:grid-cols-4 min-[600px]:grid-cols-5 md:grid-cols-6"
+        <div class="flex min-w-0 flex-1 flex-col rounded-tl-md bg-background">
+          <!-- 游戏中的顶部小类栏；“全部”是每个大类下的合并视图 -->
+          <nav
+            v-if="!searchQuery.trim()"
+            class="flex h-11 items-center"
+            :aria-label="t('furnitureLibrary.minorCategories')"
           >
+            <ScrollArea class="h-full min-w-0 flex-1 whitespace-nowrap">
+              <div class="flex h-full w-max items-center gap-0.5 px-2">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <button
+                      type="button"
+                      class="group flex h-full shrink-0 cursor-default items-center justify-center bg-transparent px-1.5 focus-visible:outline-none"
+                      :aria-label="t('furnitureLibrary.all')"
+                      :aria-pressed="selectedMinorId === null"
+                      @click="selectMinor(null)"
+                    >
+                      <div
+                        class="flex h-8 w-8 items-center justify-center rounded-md transition-all duration-200"
+                        :class="
+                          selectedMinorId === null
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-muted-foreground group-hover:bg-accent group-hover:text-foreground'
+                        "
+                      >
+                        <LayoutGrid class="h-5 w-5" />
+                      </div>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="bottom"
+                    :side-offset="-2"
+                    class="pointer-events-none text-xs"
+                  >
+                    {{ t('furnitureLibrary.all') }}
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip v-for="category in minorCategories" :key="category.id">
+                  <TooltipTrigger as-child>
+                    <button
+                      type="button"
+                      class="group flex h-full shrink-0 cursor-default items-center justify-center bg-transparent px-1.5 focus-visible:outline-none"
+                      :aria-label="getCategoryName(category)"
+                      :aria-pressed="selectedMinorId === category.id"
+                      @click="
+                        selectedMinorId === category.id
+                          ? selectMinor(null)
+                          : selectMinor(category.id)
+                      "
+                    >
+                      <div
+                        class="flex h-8 w-8 items-center justify-center rounded-md transition-all duration-200"
+                        :class="
+                          selectedMinorId === category.id
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-foreground/70 group-hover:bg-accent group-hover:text-foreground'
+                        "
+                      >
+                        <span class="h-6 w-6" :style="getCategoryIconStyle(category.id)" />
+                      </div>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="bottom"
+                    :side-offset="-2"
+                    class="pointer-events-none text-xs"
+                  >
+                    {{ getCategoryName(category) }}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <ScrollBar orientation="horizontal" class="!h-1.5" />
+            </ScrollArea>
             <div
-              v-for="item in filteredItems"
-              :key="item.id"
-              class="flex min-w-0 flex-col items-center rounded-md transition-colors hover:bg-accent"
+              class="max-w-32 shrink-0 truncate px-3 text-sm text-muted-foreground sm:max-w-56"
+              :title="classificationLabel"
             >
-              <button
-                type="button"
-                class="flex w-full min-w-0 flex-col items-center p-1.5 active:scale-95"
-                :title="item.name"
-                @click="handleAddItem(item.id)"
-              >
-                <img
-                  :src="item.icon"
-                  class="aspect-square w-full max-w-20 rounded border bg-muted object-cover"
-                  :alt="item.name"
-                  loading="lazy"
-                  @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
-                />
-                <span class="mt-1 line-clamp-2 max-w-full text-center text-[11px] leading-tight">
-                  {{ item.name }}
-                </span>
-              </button>
+              {{ classificationLabel }}
+            </div>
+          </nav>
+
+          <!-- 家具网格（可滚动） -->
+          <ScrollArea ref="furnitureScrollRef" class="min-h-0 flex-1">
+            <div class="furniture-grid">
               <div
-                v-if="item.colorPresets?.length"
-                class="flex flex-wrap justify-center gap-1 px-1 pb-1.5"
+                v-for="item in filteredItems"
+                :key="item.id"
+                class="flex min-w-0 flex-col items-center rounded transition-colors hover:bg-accent"
               >
                 <button
-                  v-for="preset in item.colorPresets"
-                  :key="preset.id"
                   type="button"
-                  class="h-5 w-5 rounded-full border border-border bg-background p-0.5 transition hover:ring-2 hover:ring-primary/60 focus-visible:ring-2 focus-visible:ring-ring"
-                  :title="getCombinationColorLabel(preset.id)"
-                  :aria-label="`${item.name} · ${getCombinationColorLabel(preset.id)}`"
-                  @click="handleAddItem(item.id, preset.id)"
+                  class="flex w-full min-w-0 flex-col items-center p-1.5 active:scale-95"
+                  :title="item.name"
+                  @click="handleAddItem(item.id)"
                 >
                   <img
-                    :src="getCombinationColorIconUrl(preset.iconId)"
-                    class="h-full w-full rounded-full object-contain"
-                    :class="preset.iconId === 0 ? 'invert dark:invert-0' : ''"
-                    alt=""
+                    :src="item.icon"
+                    class="aspect-square w-full max-w-20 rounded border bg-muted object-cover"
+                    :alt="item.name"
+                    loading="lazy"
                     @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
                   />
+                  <span class="mt-1 line-clamp-2 max-w-full text-center text-[11px] leading-tight">
+                    {{ item.name }}
+                  </span>
                 </button>
+                <div
+                  v-if="item.colorPresets?.length"
+                  class="flex flex-wrap justify-center gap-1 px-1 pb-1.5"
+                >
+                  <button
+                    v-for="preset in item.colorPresets"
+                    :key="preset.id"
+                    type="button"
+                    class="h-5 w-5 rounded-full border border-border bg-background p-0.5 transition hover:ring-2 hover:ring-primary/60 focus-visible:ring-2 focus-visible:ring-ring"
+                    :title="getCombinationColorLabel(preset.id)"
+                    :aria-label="`${item.name} · ${getCombinationColorLabel(preset.id)}`"
+                    @click="handleAddItem(item.id, preset.id)"
+                  >
+                    <img
+                      :src="getCombinationColorIconUrl(preset.iconId)"
+                      class="h-full w-full rounded-full object-contain"
+                      :class="preset.iconId === 0 ? 'invert dark:invert-0' : ''"
+                      alt=""
+                      @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')"
+                    />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- 空状态 -->
-          <div
-            v-if="filteredItems.length === 0"
-            class="flex h-32 flex-col items-center justify-center text-muted-foreground"
-          >
-            <Search class="mb-2 h-8 w-8 opacity-50" />
-            <span class="text-sm">{{ t('furnitureLibrary.noResults') }}</span>
-          </div>
+            <!-- 空状态 -->
+            <div
+              v-if="filteredItems.length === 0"
+              class="flex h-32 flex-col items-center justify-center text-muted-foreground"
+            >
+              <Search class="mb-2 h-8 w-8 opacity-50" />
+              <span class="text-sm">{{ t('furnitureLibrary.noResults') }}</span>
+            </div>
 
-          <ScrollBar orientation="vertical" class="!w-1.5" />
-        </ScrollArea>
+            <ScrollBar orientation="vertical" class="!w-1.5" />
+          </ScrollArea>
+        </div>
       </div>
-    </div>
-
-    <!-- 底部：统计信息 -->
-    <div class="border-t px-2 py-1.5 text-center text-[11px] text-muted-foreground">
-      {{ t('furnitureLibrary.stats', { total: totalCount, showing: filteredItems.length }) }}
-    </div>
+    </TooltipProvider>
   </div>
 </template>
+
+<style scoped>
+.furniture-library-container {
+  /* 使得 bg-accent 变为包含 20% 项目主色调的半透明色 */
+  --accent: color-mix(in srgb, var(--primary) 20%, transparent);
+  --accent-foreground: var(--primary);
+
+  /* 如果您希望 Hover 更加突出，甚至可以使用 25% */
+  /* --accent: color-mix(in srgb, var(--primary) 25%, transparent); */
+}
+
+.furniture-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.25rem;
+  padding: 0 0.5rem 0.5rem 0.5rem;
+}
+</style>

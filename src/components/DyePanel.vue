@@ -5,7 +5,6 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useGameDataStore } from '@/stores/gameDataStore'
 import { useEditorHistory } from '@/composables/editor/useEditorHistory'
 import { useI18n } from '@/composables/useI18n'
-import { Button } from '@/components/ui/button'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import type { AppItem, GameColorMap } from '@/types/editor'
 import type { FurnitureCombinationColorPreset } from '@/types/furniture'
@@ -482,17 +481,35 @@ function handleIconError(event: Event) {
 }
 </script>
 
+<style scoped>
+.dye-panel-container {
+  --accent: color-mix(in srgb, var(--primary) 15%, transparent);
+  --accent-foreground: var(--primary);
+  --muted: color-mix(in srgb, var(--primary) 15%, transparent);
+  --muted-foreground: var(--primary);
+}
+</style>
+
 <template>
   <div
     v-if="isVisible"
-    class="absolute top-4 left-4 z-50 flex max-h-[calc(100%-32px)] w-auto flex-col rounded-md border border-border bg-background/90 shadow-2xl backdrop-blur-md"
+    class="dye-panel-container absolute top-4 left-4 z-50 flex max-h-[calc(100%-32px)] w-auto flex-col rounded-md border border-border bg-background/90 shadow-2xl backdrop-blur-md"
   >
     <div class="flex items-center justify-between gap-4 p-3 pr-2">
       <h3 class="text-sm font-semibold">{{ t('dyePanel.title') }}</h3>
       <div class="flex items-center gap-1">
-        <Button variant="ghost" size="icon" class="h-6 w-6 shrink-0" @click="close">
-          <X class="h-4 w-4" />
-        </Button>
+        <button
+          type="button"
+          class="group flex h-8 w-8 shrink-0 cursor-default items-center justify-center bg-transparent focus-visible:outline-none"
+          :aria-label="t('common.close')"
+          @click="close"
+        >
+          <div
+            class="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-all duration-200 group-hover:bg-accent group-hover:text-foreground"
+          >
+            <X class="h-4 w-4" />
+          </div>
+        </button>
       </div>
     </div>
 

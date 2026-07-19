@@ -785,6 +785,8 @@ export const enLocale = {
     stats: '{showing} of {total} items',
     combinationDefaultColor: 'Default combination color',
     combinationColor: 'Combination color {id}',
+    expand: 'Expand panel',
+    collapse: 'Collapse panel',
   },
 
   // Dye Panel
