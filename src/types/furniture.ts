@@ -4,9 +4,37 @@
  * 原始家具条目：
  * [
  *   ItemID: number,
- *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y]]
+ *   [name_zh: string, name_en: string, icon_id: number, dim: [number, number, number], scale: [min, max], rot: [x, y], category_id: number, colors, combination, combination_colors]
  * ]
  */
+export interface FurnitureColorEntry {
+  /** 显示图标 ID（UI 色块用） */
+  idx: number
+  /** 每项为 [meshIdx, pattern, tint]。 */
+  cfg: [meshIdx: number, pattern: number, tint: number][]
+}
+
+/** 染色配置：groupId -> (colorIndex -> 变体配置) */
+export type FurnitureColorConfig = Record<number, Record<number, FurnitureColorEntry>>
+
+export type RawFurnitureCombinationMember = [
+  item_id: number,
+  position: [x: number, y: number, z: number],
+  rotation: [roll: number, pitch: number, yaw: number],
+  scale: [x: number, y: number, z: number],
+]
+
+export type RawFurnitureCombinationColorMap = [
+  member_index: number,
+  colors: [area: number, scheme_id: number][],
+]
+
+export type RawFurnitureCombinationColorPreset = [
+  color_id: number,
+  icon_id: number,
+  member_colors: RawFurnitureCombinationColorMap[],
+]
+
 export type RawFurnitureEntry = [
   number,
   [
@@ -16,23 +44,47 @@ export type RawFurnitureEntry = [
     dim: [number, number, number],
     scale: [min: number, max: number],
     rot: [x: boolean, y: boolean],
+    category_id: number,
+    colors: FurnitureColorConfig | null,
+    combination: RawFurnitureCombinationMember[] | null,
+    combination_colors: RawFurnitureCombinationColorPreset[] | null,
   ],
+]
+
+export type RawFurnitureCategory = [
+  name_zh: string,
+  name_en: string,
+  icon_id: number,
+  parent_id?: number,
 ]
 
 /** 远程数据格式 */
 export interface BuildingMomoFurniture {
   v: string
-  /**
-   * 远程数据格式：
-   * {
-   *   "v": "20251115",
-   *   "d": [
-   *     [1170000817, ["流转之柱・家园", "Warp Spire: Home", 1885877145, [169.5, 142.4, 368.1]]],
-   *     ...
-   *   ]
-   * }
-   */
+  c: Record<string, RawFurnitureCategory>
   d: RawFurnitureEntry[]
+}
+
+export interface FurnitureCategory {
+  id: number
+  name_cn: string
+  name_en: string
+  iconId: number
+  parentId: number | null
+}
+
+export interface FurnitureCombinationMember {
+  itemId: number
+  position: [number, number, number]
+  rotation: [roll: number, pitch: number, yaw: number]
+  scale: [number, number, number]
+}
+
+export interface FurnitureCombinationColorPreset {
+  id: number
+  iconId: number
+  /** 与 combination 成员下标对齐的游戏 ColorMap。 */
+  colorMaps: Record<string, number>[]
 }
 
 /** 家具物品信息（应用内部统一使用的结构） */
@@ -53,6 +105,14 @@ export interface FurnitureItem {
     y: boolean
     z: boolean
   }
+  /** 家具小分类 ID */
+  categoryId: number
+  /** 家具染色渲染配置 */
+  colors?: FurnitureColorConfig
+  /** 组合成员；存在时目录条目本身不作为家具摆放 */
+  combination?: FurnitureCombinationMember[]
+  /** 该组合在游戏中定义的整组染色方案 */
+  combinationColorPresets?: FurnitureCombinationColorPreset[]
 }
 
 // ========== Furniture DB (模型配置) ==========
@@ -82,22 +142,6 @@ export interface FurnitureMeshConfig {
   hashes: FurnitureMeshHashes
 }
 
-/** 单个染色变体的渲染配置 */
-export interface FurnitureColorEntry {
-  /** 显示图标 ID（UI 色块用） */
-  idx: number
-  /**
-   * 材质赋值列表：每项 [meshIdx, pattern, tint]
-   * - meshIdx: 目标源 mesh 索引（对应 config.meshes 的下标）
-   * - pattern: D/N/O 贴图变体索引（对应 matName_D{pattern} / _N{pattern} / _O{pattern}）
-   * - tint:    T 调色板变体索引（对应 matName_T{tint}）
-   */
-  cfg: [meshIdx: number, pattern: number, tint: number][]
-}
-
-/** 染色配置：groupId -> (colorIndex -> 变体配置) */
-export type FurnitureColorConfig = Record<number, Record<number, FurnitureColorEntry>>
-
 /** 家具模型配置 */
 export interface FurnitureModelConfig {
   id: number
@@ -107,7 +151,6 @@ export interface FurnitureModelConfig {
   root_offset: { x: number; y: number; z: number }
   scale_range?: [number, number]
   rotate_axis?: [boolean, boolean]
-  colors?: FurnitureColorConfig
   price?: number
 }
 

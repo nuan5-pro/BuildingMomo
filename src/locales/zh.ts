@@ -761,9 +761,15 @@ export const zhLocale = {
   // 家具背包
   furnitureLibrary: {
     title: '家具背包',
-    searchPlaceholder: '搜索家具...',
+    searchPlaceholder: '搜索家具 (支持拼音 / 首字母)...',
+    searchResults: '搜索结果',
+    all: '全部',
+    majorCategories: '家具大类',
+    minorCategories: '家具分类',
     noResults: '未找到匹配的家具',
     stats: '共 {total} 个，显示 {showing} 个',
+    combinationDefaultColor: '默认配色',
+    combinationColor: '组合配色 {id}',
   },
 
   // 染色面板
@@ -775,5 +781,8 @@ export const zhLocale = {
     group: '区域{group}',
     disable: '禁用',
     mixed: '混合',
+    combinationPresets: '组合配色',
+    combinationDefault: '默认配色',
+    combinationPreset: '组合配色 {id}',
   },
 }

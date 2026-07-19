@@ -50,7 +50,7 @@ function buildModelDyeSignature(
 }
 
 /**
- * 根据家具模型的染色配置和物品 ColorMap，解析模型染色计划。
+ * 根据家具元数据中的染色配置和物品 ColorMap，解析模型染色计划。
  *
  * 规则：
  * 1) 无 colors 配置 → plain

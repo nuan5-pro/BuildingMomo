@@ -199,7 +199,7 @@ export function useModelMode() {
       if (hasValidConfig) {
         const { dyePlan, meshKey } = resolveCachedModelDyeMeta({
           item,
-          colorsConfig: config.colors,
+          colorsConfig: gameDataStore.getFurniture(item.gameId)?.colors,
         })
         key = meshKey
         if (!groupMeta.has(key)) {
