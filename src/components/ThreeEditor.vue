@@ -542,6 +542,7 @@ function handleTresReady(context: any) {
         scene,
         getCamera: () => toRaw(context.camera.activeCamera.value),
         invalidate: () => context.renderer.invalidate(),
+        materialAnimation: !settingsStore.settings.onDemandRendering,
         onContextRestored: () => {
           sceneEnvironment?.reset()
           return environmentTransition?.request()
@@ -632,6 +633,11 @@ function handleTresReady(context: any) {
 }
 
 watch([terrainEnabled, terrainObject], () => invalidateScene({ shadows: true }), { flush: 'post' })
+watch(
+  () => settingsStore.settings.onDemandRendering,
+  (onDemand) => furnitureContext?.setMaterialAnimation(!onDemand),
+  { flush: 'post' }
+)
 // 网格只切换 visible，场景图不变；按需渲染下需要显式请求重绘。
 watch(
   () => settingsStore.settings.showGrid,
